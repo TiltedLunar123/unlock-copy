@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Unlock Copy options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Unlock Copy</h1>
+
+      <section>
+        <h2>Defaults for new sites</h2>
+        <p class="hint">
+          Changing a default also changes every site you have not set individually.
+        </p>
+        <ul class="rows">
+          <li>
+            <label class="row" for="selection">
+              <span class="row-text">
+                <span class="row-title">Text selection and copy</span>
+                <span class="row-sub">Restores selecting, copying and dragging text.</span>
+              </span>
+              <input type="checkbox" id="selection" class="switch" data-feature="selection" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="contextmenu">
+              <span class="row-text">
+                <span class="row-title">Right-click menu</span>
+                <span class="row-sub">Brings back the browser's own menu.</span>
+              </span>
+              <input type="checkbox" id="contextmenu" class="switch" data-feature="contextmenu" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="keyboard">
+              <span class="row-text">
+                <span class="row-title">Keyboard shortcuts</span>
+                <span class="row-sub">Ctrl+C, Ctrl+A, Ctrl+X and friends. Never inside text boxes.</span>
+              </span>
+              <input type="checkbox" id="keyboard" class="switch" data-feature="keyboard" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="cleanCopy">
+              <span class="row-text">
+                <span class="row-title">Clean copy</span>
+                <span class="row-sub">Strips the attribution some sites append to copied text.</span>
+              </span>
+              <input type="checkbox" id="cleanCopy" class="switch" data-feature="cleanCopy" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="aggressive">
+              <span class="row-text">
+                <span class="row-title">Aggressive mode</span>
+                <span class="row-sub">
+                  Also disables invisible click-blocking overlays and strips mouse and key
+                  handlers. Fixes stubborn sites, and breaks some ordinary ones. Off unless you
+                  need it.
+                </span>
+              </span>
+              <input type="checkbox" id="aggressive" class="switch" data-feature="aggressive" />
+            </label>
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Always unlocked</h2>
+        <p class="hint" id="sites-hint">Sites you chose to unlock on every visit.</p>
+        <ul class="sites" id="sites"></ul>
+      </section>
+
+      <section>
+        <h2>What this cannot do</h2>
+        <ul class="limits">
+          <li>Text drawn into a canvas, or shipped as an image, is not text. Nothing can copy it.</li>
+          <li>
+            Text in CSS <code>::before</code> or <code>::after</code> content is not selectable by
+            design.
+          </li>
+          <li>Embedded frames from another site stay locked unless you unlock that site too.</li>
+          <li>The browser's built-in PDF viewer and browser pages are off limits to extensions.</li>
+        </ul>
+      </section>
+    </main>
+
+    <script src="../lib/browser.js"></script>
+    <script src="../lib/policy.js"></script>
+    <script src="../lib/origins.js"></script>
+    <script src="../lib/settings.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

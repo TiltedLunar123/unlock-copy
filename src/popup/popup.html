@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Unlock Copy</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main id="app">
+      <header class="site">
+        <span class="site-host" id="host">&nbsp;</span>
+      </header>
+
+      <!-- Shown when the page can be unlocked. -->
+      <section id="live" hidden>
+        <button id="primary" class="primary" type="button">
+          <span class="primary-label" id="primary-label">Unlock this page</span>
+          <span class="primary-note" id="primary-note"></span>
+        </button>
+
+        <label class="row row-always" for="always">
+          <span class="row-text">
+            <span class="row-title">Always unlock this site</span>
+            <span class="row-sub" id="always-sub">Runs before the site's code. Asks once.</span>
+          </span>
+          <input type="checkbox" id="always" class="switch" />
+        </label>
+
+        <h2 class="group">What gets unlocked</h2>
+        <ul class="features">
+          <li>
+            <label class="row" for="selection">
+              <span class="row-text"><span class="row-title">Text selection and copy</span></span>
+              <input type="checkbox" id="selection" class="switch" data-feature="selection" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="contextmenu">
+              <span class="row-text"><span class="row-title">Right-click menu</span></span>
+              <input type="checkbox" id="contextmenu" class="switch" data-feature="contextmenu" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="keyboard">
+              <span class="row-text"><span class="row-title">Keyboard shortcuts</span></span>
+              <input type="checkbox" id="keyboard" class="switch" data-feature="keyboard" />
+            </label>
+          </li>
+          <li>
+            <label class="row" for="cleanCopy">
+              <span class="row-text">
+                <span class="row-title">Clean copy</span>
+                <span class="row-sub">Removes text the site adds to what you copied.</span>
+              </span>
+              <input type="checkbox" id="cleanCopy" class="switch" data-feature="cleanCopy" />
+            </label>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Shown when it cannot. -->
+      <section id="blocked" hidden>
+        <p class="blocked-message" id="blocked-message"></p>
+      </section>
+
+      <footer>
+        <a href="#" id="options">Options</a>
+      </footer>
+    </main>
+
+    <script src="../lib/browser.js"></script>
+    <script src="../lib/policy.js"></script>
+    <script src="../lib/origins.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

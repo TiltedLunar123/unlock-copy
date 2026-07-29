@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Unlock Copy</title>
+  <!--
+    Two ideas in one mark: the offset double card is the universal copy glyph,
+    and the shackle above it is sprung clear of the body rather than seated on
+    it. Pushing the shackle right of centre and leaving a real gap under both
+    legs is what makes "open" legible; a shackle hinged into the body closes
+    into a loop with a tail and reads as a digit once it gets small.
+
+    See icon-small.svg for the 16 and 32px artwork, which drops the card stack.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2fb96d" />
+      <stop offset="1" stop-color="#12703c" />
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#tile)" />
+
+  <path
+    d="M62 47 V37 a15 15 0 0 1 30 0 V47"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="10"
+    stroke-linecap="round"
+  />
+
+  <!-- Back card held to 42% so the stack reads as depth, not as clutter. -->
+  <rect x="26" y="57" width="48" height="44" rx="7" fill="#ffffff" fill-opacity="0.42" />
+  <rect x="42" y="65" width="56" height="44" rx="7" fill="#ffffff" />
+
+  <rect x="53" y="78" width="34" height="6" rx="3" fill="#12703c" />
+  <rect x="53" y="90" width="22" height="6" rx="3" fill="#12703c" />
+</svg>

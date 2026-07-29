@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Same origin frame</title>
+    <style>
+      body {
+        margin: 0;
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+      #t14 {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="t14">UNLOCKCOPY-14-IFRAME</p>
+    <script>
+      // Same shape as case 3, one frame down, to prove allFrames actually
+      // reaches here rather than only appearing to.
+      document.addEventListener(
+        'copy',
+        (e) => {
+          e.preventDefault();
+        },
+        true
+      );
+    </script>
+  </body>
+</html>

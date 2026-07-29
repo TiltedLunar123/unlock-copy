@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Unlock Copy torture fixture</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+      section {
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+      }
+      h2 {
+        margin: 0 0 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #777;
+      }
+      p {
+        margin: 0;
+      }
+      /* Case 5: the plain CSS lock. */
+      #t5 {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      /* Case 13: transparent selection painting on top of a CSS lock. */
+      #t13 {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+      }
+      #t13::selection {
+        background: transparent;
+        color: inherit;
+      }
+      iframe {
+        width: 100%;
+        height: 60px;
+        border: 0;
+      }
+    </style>
+
+    <script>
+      /*
+       * Case 4 has to register before anything else on the page, because the
+       * whole point of it is to be the one blocker a late injection cannot
+       * beat: a capture listener on window itself. Registration order decides
+       * ties, so it goes first, in head, before any other script.
+       */
+      window.addEventListener(
+        'copy',
+        (e) => {
+          if (isCase(e, 't4')) e.preventDefault();
+        },
+        true
+      );
+
+      /** True when the current selection sits inside the given case element. */
+      function isCase(event, id) {
+        const target = document.getElementById(id);
+        if (!target) return false;
+        const selection = document.getSelection();
+        if (!selection || selection.rangeCount === 0) return false;
+        const node = selection.getRangeAt(0).commonAncestorContainer;
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        return !!el && (el === target || target.contains(el) || el.contains(target));
+      }
+    </script>
+  </head>
+
+  <body>
+    <section>
+      <h2>0 control, nothing blocks this</h2>
+      <p id="t0">UNLOCKCOPY-0-CONTROL</p>
+    </section>
+
+    <section>
+      <h2>1 inline attributes</h2>
+      <p
+        id="t1"
+        oncopy="return false"
+        oncontextmenu="return false"
+        onselectstart="return false"
+        ondragstart="return false"
+      >
+        UNLOCKCOPY-1-INLINE
+      </p>
+    </section>
+
+    <section>
+      <h2>2 addEventListener on document, bubble</h2>
+      <p id="t2">UNLOCKCOPY-2-DOCBUBBLE</p>
+    </section>
+
+    <section>
+      <h2>3 addEventListener on document, capture</h2>
+      <p id="t3">UNLOCKCOPY-3-DOCCAPTURE</p>
+    </section>
+
+    <section>
+      <h2>4 addEventListener on window, capture, registered first</h2>
+      <p id="t4">UNLOCKCOPY-4-WINCAPTURE</p>
+    </section>
+
+    <section>
+      <h2>5 css user-select none</h2>
+      <p id="t5">UNLOCKCOPY-5-USERSELECT</p>
+    </section>
+
+    <section>
+      <h2>6 document.oncopy property assignment</h2>
+      <p id="t6">UNLOCKCOPY-6-ONPROPERTY</p>
+    </section>
+
+    <section>
+      <h2>7 keydown interception of ctrl+c</h2>
+      <p id="t7">UNLOCKCOPY-7-KEYDOWN</p>
+    </section>
+
+    <section>
+      <h2>8 selection watchdog on a timer</h2>
+      <p id="t8">UNLOCKCOPY-8-WATCHDOG</p>
+    </section>
+
+    <section>
+      <h2>9 clipboard hijack via setData</h2>
+      <p id="t9">UNLOCKCOPY-9-HIJACK</p>
+    </section>
+
+    <section>
+      <h2>10 open shadow dom</h2>
+      <div id="host10"></div>
+    </section>
+
+    <section>
+      <h2>11 mutation observer re-adds the attribute</h2>
+      <p id="t11" oncopy="return false">UNLOCKCOPY-11-REARM</p>
+    </section>
+
+    <section>
+      <h2>12 framework style root delegate</h2>
+      <div id="root12"><p id="t12">UNLOCKCOPY-12-DELEGATE</p></div>
+    </section>
+
+    <section>
+      <h2>13 user-select none important plus transparent selection</h2>
+      <p id="t13">UNLOCKCOPY-13-IMPORTANT</p>
+    </section>
+
+    <section>
+      <h2>14 same origin iframe</h2>
+      <iframe id="frame14" src="frame.html" title="same origin frame"></iframe>
+    </section>
+
+    <section>
+      <h2>E editor with a legitimate copy handler, must keep working</h2>
+      <p id="tE" contenteditable="true">UNLOCKCOPY-E-EDITOR</p>
+    </section>
+
+    <script>
+      /* ---- 2: document, bubble ---- */
+      document.addEventListener('copy', (e) => {
+        if (isCase(e, 't2')) e.preventDefault();
+      });
+
+      /* ---- 3: document, capture ---- */
+      document.addEventListener(
+        'copy',
+        (e) => {
+          if (isCase(e, 't3')) e.preventDefault();
+        },
+        true
+      );
+
+      /* ---- 6: legacy handler property ---- */
+      document.oncopy = function (e) {
+        if (isCase(e, 't6')) return false;
+        return undefined;
+      };
+
+      /* ---- 7: eat the shortcut before the browser sees it ---- */
+      document.addEventListener(
+        'keydown',
+        (e) => {
+          if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'c') {
+            if (isCase(e, 't7')) e.preventDefault();
+          }
+        },
+        true
+      );
+
+      /* ---- 8: clear the selection out from under the user ---- */
+      setInterval(() => {
+        const selection = document.getSelection();
+        if (!selection || selection.rangeCount === 0) return;
+        const node = selection.getRangeAt(0).commonAncestorContainer;
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        const target = document.getElementById('t8');
+        if (el && target && (el === target || target.contains(el) || el.contains(target))) {
+          selection.removeAllRanges();
+        }
+      }, 40);
+
+      /* ---- 9: let the copy through, but swap the payload ---- */
+      document.addEventListener('copy', (e) => {
+        if (!isCase(e, 't9')) return;
+        e.clipboardData.setData(
+          'text/plain',
+          document.getSelection().toString() + '\n\nRead more at example.com'
+        );
+        e.preventDefault();
+      });
+
+      /* ---- 10: open shadow root, locked inside ---- */
+      const root10 = document.getElementById('host10').attachShadow({ mode: 'open' });
+      root10.innerHTML =
+        '<style>p{user-select:none;-webkit-user-select:none}</style>' +
+        '<p id="t10">UNLOCKCOPY-10-SHADOW</p>';
+      root10.addEventListener(
+        'copy',
+        (e) => {
+          e.preventDefault();
+        },
+        true
+      );
+
+      /* ---- 11: put the attribute back whenever it is removed ---- */
+      const t11 = document.getElementById('t11');
+      new MutationObserver(() => {
+        if (!t11.hasAttribute('oncopy')) t11.setAttribute('oncopy', 'return false');
+      }).observe(t11, { attributes: true });
+
+      /* ---- 12: one delegate on a root container, the React shape ---- */
+      document.getElementById('root12').addEventListener(
+        'copy',
+        (e) => {
+          e.preventDefault();
+        },
+        true
+      );
+
+      /* ---- E: a real editor that owns its copy on purpose ---- */
+      document.getElementById('tE').addEventListener('copy', (e) => {
+        e.clipboardData.setData('text/plain', 'UNLOCKCOPY-E-TRANSFORMED');
+        e.preventDefault();
+      });
+    </script>
+  </body>
+</html>

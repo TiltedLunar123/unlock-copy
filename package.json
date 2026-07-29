@@ -1,0 +1,17 @@
+{
+  "name": "unlock-copy",
+  "version": "1.0.0",
+  "description": "Restore text selection, copy, right-click and keyboard shortcuts on sites that block them. Chrome and Firefox, MV3.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "check": "node tools/build.mjs --check",
+    "icons": "node tools/icons.mjs",
+    "test": "node --test test/*.test.mjs",
+    "e2e": "node tools/e2e.mjs",
+    "zip": "node tools/build.mjs --zip",
+    "all": "node tools/build.mjs --zip --check && node --test test/*.test.mjs && node tools/e2e.mjs"
+  },
+  "license": "MIT"
+}
