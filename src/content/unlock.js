@@ -53,8 +53,13 @@
   ];
   const MENU_EVENTS = ['contextmenu'];
   const KEY_EVENTS = ['keydown', 'keypress', 'keyup'];
-  /** Only under aggressive mode: pages use these for real UI far more often. */
-  const POINTER_EVENTS = ['mousedown', 'mouseup'];
+  /**
+   * Only under aggressive mode. Pages use mousedown and mouseup for real UI far
+   * more often than for blocking, and unblocking paste is worth having (sites
+   * that forbid pasting into a password or confirmation field are a common
+   * complaint) but is the fastest way to break an editor if applied by default.
+   */
+  const POINTER_EVENTS = ['mousedown', 'mouseup', 'paste', 'beforepaste'];
 
   /**
    * Inline attributes worth stripping. Deliberately excludes onmousedown and
@@ -105,7 +110,23 @@
     keyboard: true,
     cleanCopy: true,
     aggressive: false,
-    mode: 'late',
+    /**
+     * Defaults to early, and that direction matters.
+     *
+     * A registered content script has no way to be told which mode it is in
+     * before it has to decide: it runs at document_start and the bridge cannot
+     * answer until after a message round trip, by which point the patches are
+     * already installed. The late path, by contrast, always sets a boot payload
+     * immediately before injecting this file, so "late" is the case that can
+     * always announce itself and "early" is the correct default for the case
+     * that cannot.
+     *
+     * Getting this backwards is not a small mistake. It makes every
+     * always-unlocked site install the blunt capture net instead of wrapping,
+     * which silently drops the legitimate copy handlers that wrapping exists to
+     * preserve, and skips the attachShadow patch entirely.
+     */
+    mode: 'early',
   };
 
   /** Undo stack, so disabling actually restores the page rather than reloading it. */
@@ -116,13 +137,29 @@
   const rawAdd = EventTarget.prototype.addEventListener;
   const rawRemove = EventTarget.prototype.removeEventListener;
   const wrappers = new WeakMap();
+  /** How many wrapped listener calls are currently neutering a given event. */
+  const neuterDepth = new WeakMap();
 
   let observer = null;
   let netInstalled = false;
+  let installed = false;
 
   /* ---------------------------------------------------------------- */
   /* Helpers                                                           */
   /* ---------------------------------------------------------------- */
+
+  /**
+   * Every type that could ever need neutering, regardless of the current
+   * policy.
+   *
+   * Wrapping is decided once, when the page registers a listener; whether to
+   * actually neuter is decided later, when the event fires. Those have to be
+   * different questions. If registration consulted the policy, a switch turned
+   * on after page load would do nothing to the listeners already registered
+   * under the old policy, and the user would see a switch that only works if
+   * they reload first.
+   */
+  const WRAPPABLE = SELECTION_EVENTS.concat(MENU_EVENTS, KEY_EVENTS, POINTER_EVENTS);
 
   function typeIsHostile(type) {
     if (policy.selection && SELECTION_EVENTS.indexOf(type) !== -1) return true;
@@ -133,8 +170,15 @@
   }
 
   /**
-   * Walk up through shadow boundaries looking for an editing context. Plain
+   * Walk up through shadow boundaries looking for a rich editing context. Plain
    * parentElement stops at a shadow root, so hop to the host and keep going.
+   *
+   * Deliberately does NOT treat a plain input, textarea or select as an editor.
+   * The exemption exists for editors that own their copy handling for real
+   * reasons, and a bare form field does not: its copy is the browser's ordinary
+   * one. Exempting them would mean a site with a blanket copy ban still blocks
+   * copying out of its own comment box, which is precisely the complaint people
+   * install this to fix.
    */
   function isEditor(node) {
     let el = node && node.nodeType === 1 ? node : node && node.parentElement;
@@ -142,8 +186,6 @@
     while (el && hops++ < 200) {
       try {
         if (el.isContentEditable) return true;
-        const tag = el.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
         if (el.matches && el.matches(EDITOR_SELECTOR)) return true;
       } catch {
         /* a custom element with a hostile matches() must not stop the walk */
@@ -192,6 +234,15 @@
    * is equivalent to preventDefault().
    */
   function neuter(e) {
+    // One event can reach several wrapped listeners, and a listener can invoke
+    // another one on the same event before returning. Restoring on the first
+    // return would hand the outer listener a working preventDefault halfway
+    // through, so the shadows are reference counted and only lifted by the
+    // outermost call.
+    const depth = (neuterDepth.get(e) || 0) + 1;
+    neuterDepth.set(e, depth);
+    if (depth > 1) return () => neuterDepth.set(e, neuterDepth.get(e) - 1);
+
     const shadowed = [];
     const put = (name, value) => {
       try {
@@ -205,7 +256,22 @@
     put('preventDefault', NOOP);
     put('stopPropagation', NOOP);
     put('stopImmediatePropagation', NOOP);
-    put('returnValue', true);
+
+    // returnValue is the legacy cancel path: assigning false to it calls
+    // preventDefault through the accessor on Event.prototype. An accessor that
+    // reads back true and ignores writes is closer to the truth than a writable
+    // data property, which would let a page assign false, read false back, and
+    // believe it had cancelled something it had not.
+    try {
+      Object.defineProperty(e, 'returnValue', {
+        configurable: true,
+        get: () => true,
+        set: () => {},
+      });
+      shadowed.push('returnValue');
+    } catch {
+      /* leave the native accessor in place; preventDefault is already a no-op */
+    }
 
     // A page that does not cancel the copy can still overwrite what lands on
     // the clipboard. Both holes have to be closed, and closing only one of
@@ -221,6 +287,9 @@
     }
 
     return () => {
+      const remaining = (neuterDepth.get(e) || 1) - 1;
+      neuterDepth.set(e, remaining);
+      if (remaining > 0) return;
       for (const name of shadowed) {
         try {
           delete e[name];
@@ -318,7 +387,7 @@
     if (!addDesc || !addDesc.configurable) return;
 
     proto.addEventListener = function (type, listener, options) {
-      if (typeIsHostile(type)) {
+      if (WRAPPABLE.indexOf(type) !== -1) {
         return rawAdd.call(this, type, wrapListener(listener), options);
       }
       return rawAdd.call(this, type, listener, options);
@@ -415,10 +484,20 @@
       if (!desc || !desc.configurable || typeof desc.value !== 'function') continue;
       const original = desc.value;
       Selection.prototype[name] = function () {
-        // Our own popup and the browser's internals never call this, so a page
-        // clearing the selection while the user is trying to copy is always the
-        // behaviour being complained about.
-        if (policy.enabled && policy.selection) return undefined;
+        // Blocked only for a selection sitting in ordinary page content, which
+        // is the case people complain about. An editor clearing its own
+        // selection after an operation is legitimate and has to keep working,
+        // and the anchor node is the only signal available about which of the
+        // two is happening.
+        if (policy.enabled && policy.selection) {
+          let anchor = null;
+          try {
+            anchor = this.anchorNode;
+          } catch {
+            anchor = null;
+          }
+          if (!anchor || !isEditor(anchor)) return undefined;
+        }
         return original.apply(this, arguments);
       };
       undo.push(() => Object.defineProperty(Selection.prototype, name, desc));
@@ -449,6 +528,47 @@
       return root;
     };
     undo.push(() => Object.defineProperty(Element.prototype, 'attachShadow', desc));
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Patch: setAttribute                                               */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Refuse to re-apply a hostile inline handler.
+   *
+   * An inline `oncopy="return false"` cannot be neutralised the way a
+   * registered listener can. It cancels through its *return value*, and the
+   * engine processes that internally rather than by calling the preventDefault
+   * that gets shadowed, so the only counter is to remove the attribute. That
+   * turns into a race the moment the page keeps putting it back from a
+   * MutationObserver, and a race against a tight loop is not a fix.
+   *
+   * Blocking the write instead is deterministic: the page's observer fires,
+   * calls setAttribute, and nothing happens.
+   */
+  function patchSetAttribute() {
+    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'setAttribute');
+    if (!desc || !desc.configurable || typeof desc.value !== 'function') return;
+    const original = desc.value;
+
+    Element.prototype.setAttribute = function (name, value) {
+      try {
+        if (
+          policy.enabled &&
+          typeof name === 'string' &&
+          attrList().indexOf(name.toLowerCase()) !== -1 &&
+          !isEditor(this)
+        ) {
+          return undefined;
+        }
+      } catch {
+        /* fall through and behave normally */
+      }
+      return original.apply(this, arguments);
+    };
+
+    undo.push(() => Object.defineProperty(Element.prototype, 'setAttribute', desc));
   }
 
   /* ---------------------------------------------------------------- */
@@ -505,6 +625,11 @@
       return;
     }
     for (const el of nodes) {
+      // An editor with an inline copy handler is rare, but stripping it would
+      // break the editor for the same reason dropping its listener would. The
+      // walk is cheap here because the selector already narrowed this to the
+      // handful of nodes that carry one of these attributes at all.
+      if (isEditor(el)) continue;
       for (const attr of attrs) {
         if (el.hasAttribute(attr)) {
           try {
@@ -637,17 +762,36 @@
   /* Lifecycle                                                         */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Install or remove the capture net to match the current mode.
+   *
+   * Separate from install() because the mode can still change afterwards: the
+   * popup pushes a fresh policy into an already running engine when a switch is
+   * flipped, and that payload carries the mode with it.
+   */
+  function syncNet() {
+    if (policy.mode === 'late') installNet();
+  }
+
   function install() {
     patchEventTarget();
     patchHandlerProps();
     patchSelection();
-    if (policy.mode === 'early') {
-      patchAttachShadow();
-    } else {
-      // Late mode cannot un-register what already exists, so it needs the net.
-      installNet();
-    }
+    // Harmless in late mode and useful in both: single page apps keep building
+    // shadow roots long after load, and this is the only moment a closed one is
+    // ever reachable.
+    patchAttachShadow();
+    patchSetAttribute();
+
+    // Shields must be registered before the net. Both listen on window capture,
+    // ties there are broken by registration order, and under aggressive mode the
+    // net stops mousedown outright, so registering it first would make the
+    // overlay handler dead code in exactly the configuration that needs it.
     installShields();
+    // Late mode cannot un-register what already exists, so it needs the net.
+    syncNet();
+
+    installed = true;
 
     const start = () => {
       sweep();
@@ -670,6 +814,10 @@
     for (const key of Object.keys(policy)) {
       if (key in next) policy[key] = next[key];
     }
+    // Learning the mode after install() has run is normal on the late path,
+    // where the boot payload arrives first but the popup can also push an
+    // update later.
+    if (installed) syncNet();
     if (policy.enabled) refresh();
   }
 

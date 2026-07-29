@@ -14,8 +14,36 @@
   /* Badge                                                             */
   /* ---------------------------------------------------------------- */
 
-  /** Tabs unlocked for this session only. Cleared when the tab navigates. */
+  /**
+   * Tabs unlocked for this session only, used to keep the badge cheap.
+   *
+   * Not the source of truth. A service worker is evicted whenever the browser
+   * feels like it, taking this Set with it while the injected engine carries on
+   * running in the page, so anything that reports state to the user asks the
+   * page instead. See isEngineActive.
+   */
   const sessionTabs = new Set();
+
+  /**
+   * Ask the page itself whether the engine is running there.
+   *
+   * This survives service worker eviction, which an in-memory flag does not,
+   * and it cannot drift from reality the way a cached bit can.
+   */
+  async function isEngineActive(tabId) {
+    try {
+      const [frame] = await api.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => !!(window.__unlockCopyEngine && window.__unlockCopyEngine.policy.enabled),
+      });
+      return !!(frame && frame.result);
+    } catch {
+      // No access to this tab, or it is a page we cannot script. Either way the
+      // engine is not running there.
+      return false;
+    }
+  }
 
   async function paintBadge(tabId, on) {
     try {
@@ -94,8 +122,34 @@
   /* Message handlers                                                  */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Whether the browser has granted this extension access to file URLs.
+   *
+   * Chrome exposes this as a toggle on the extension's own settings page and it
+   * is off by default. Firefox has no equivalent, so the check simply reports
+   * false there and local files stay refused with an accurate message.
+   */
+  let fileAccessCache = null;
+  function fileAccess() {
+    return fileAccessCache === true;
+  }
+  (async () => {
+    try {
+      fileAccessCache = await api.extension.isAllowedFileSchemeAccess();
+    } catch {
+      fileAccessCache = false;
+    }
+  })();
+
   async function getState(tab) {
-    const info = UC.origins.classify(tab && tab.url);
+    // Re-read on every popup open: the user can flip the toggle at any time and
+    // a stale answer sends them back to a settings page they already changed.
+    try {
+      fileAccessCache = await api.extension.isAllowedFileSchemeAccess();
+    } catch {
+      fileAccessCache = false;
+    }
+    const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) {
       return { ok: false, reason: info.reason, message: UC.origins.messageFor(info.reason) };
     }
@@ -103,9 +157,11 @@
     const entry = await UC.settings.siteEntry(info.origin);
     let granted = false;
     try {
-      granted = await api.permissions.contains({
-        origins: [UC.origins.patternFor(info.origin)],
-      });
+      granted = info.local
+        ? false
+        : await api.permissions.contains({
+            origins: [UC.origins.patternFor(info.origin)],
+          });
     } catch {
       granted = false;
     }
@@ -114,19 +170,23 @@
       ok: true,
       origin: info.origin,
       host: info.host,
+      // A local file has no origin a permission can be scoped to, so the popup
+      // offers the one-click unlock and explains why the toggle is missing
+      // rather than showing one whose request would be rejected.
+      local: !!info.local,
       // "always" is only true when the grant actually exists. Reporting a site
       // as remembered while the permission is gone is the lie that makes users
       // think the extension is broken.
       always: entry.always && granted,
       pendingGrant: entry.always && !granted,
-      sessionActive: sessionTabs.has(tab.id),
+      sessionActive: await isEngineActive(tab.id),
       features: entry.resolved,
       defaults: entry.defaults,
     };
   }
 
   async function unlockOnce(tab) {
-    const info = UC.origins.classify(tab && tab.url);
+    const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) return { ok: false, reason: info.reason };
 
     const entry = await UC.settings.siteEntry(info.origin);
@@ -151,7 +211,7 @@
    * grant. This function verifies rather than trusting.
    */
   async function setAlways(tab, always) {
-    const info = UC.origins.classify(tab && tab.url);
+    const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) return { ok: false, reason: info.reason };
 
     const pattern = UC.origins.patternFor(info.origin);
@@ -190,7 +250,7 @@
     if (scope === 'global') {
       await UC.settings.writeDefaults({ [feature]: !!value });
     } else {
-      const info = UC.origins.classify(tab && tab.url);
+      const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
       if (!info.ok) return { ok: false, reason: info.reason };
       const entry = await UC.settings.siteEntry(info.origin);
       const resolved = Object.assign({}, entry.resolved, { [feature]: !!value });
@@ -201,7 +261,7 @@
 
     // Push the change to a tab that is already unlocked, both worlds, so the
     // switch takes effect without a reload.
-    const info = UC.origins.classify(tab && tab.url);
+    const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (info.ok) {
       const entry = await UC.settings.siteEntry(info.origin);
       const page = UC.policy.forPage(entry.resolved, entry.always ? 'early' : 'late');
@@ -245,6 +305,24 @@
       }
     }
 
+    return { ok: true };
+  }
+
+  /**
+   * Drop a site from the always-unlock list, and give back its permission.
+   *
+   * Lives here rather than in the options page so that every storage mutation
+   * happens in one context and the settings queue can serialise them.
+   */
+  async function forgetSite(origin) {
+    if (!origin) return { ok: false, reason: 'no-origin' };
+    await UC.settings.writeSite(origin, { always: false });
+    try {
+      await api.permissions.remove({ origins: [UC.origins.patternFor(origin)] });
+    } catch {
+      /* already revoked, which is the state we wanted anyway */
+    }
+    await UC.registry.reconcile();
     return { ok: true };
   }
 
@@ -298,6 +376,7 @@
       setFeature(tab, msg.feature, msg.value, msg.scope),
     'unlock-copy/policy-for-frame': (msg, sender) => policyForFrame(sender),
     'unlock-copy/ensure-css': (msg, sender) => ensureCss(sender),
+    'unlock-copy/forget-site': (msg) => forgetSite(msg.origin),
     'unlock-copy/reconcile': () => UC.registry.reconcile(),
   };
 
@@ -322,9 +401,12 @@
     return true;
   });
 
-  // A session unlock dies with the document it patched.
+  // A session unlock dies with the document it patched, and a reload makes a new
+  // document even though the URL never changed. Gating this on changeInfo.url
+  // being present misses exactly that case, which leaves the badge reading ON
+  // over a page where copying is blocked again.
   api.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === 'loading' && changeInfo.url !== undefined) {
+    if (changeInfo.status === 'loading') {
       sessionTabs.delete(tabId);
       paintBadge(tabId, false);
     }
@@ -363,7 +445,10 @@
       if (name !== 'toggle-unlock') return;
       const [tab] = await api.tabs.query({ active: true, currentWindow: true });
       if (!tab) return;
-      if (sessionTabs.has(tab.id)) await lock(tab);
+      // Ask the page rather than the Set: after a worker eviction the Set is
+      // empty while the page is still unlocked, and the shortcut would then
+      // unlock an already unlocked page instead of relocking it.
+      if (await isEngineActive(tab.id)) await lock(tab);
       else await unlockOnce(tab);
     });
   }

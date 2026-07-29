@@ -29,9 +29,16 @@ UC.origins = (function () {
 
   /**
    * Classify a tab URL.
-   * @returns {{ok: boolean, reason?: string, origin?: string, host?: string, pattern?: string}}
+   *
+   * @param {string} url
+   * @param {{fileAccess?: boolean}} [options] whether the browser has granted
+   *   this extension access to file URLs. Refusing every file:// page even when
+   *   the user has turned that on would be wrong, and the popup would keep
+   *   telling them to enable a setting they already enabled.
+   * @returns {{ok: boolean, reason?: string, origin?: string, host?: string,
+   *   pattern?: string, local?: boolean}}
    */
-  function classify(url) {
+  function classify(url, options) {
     if (!url) return { ok: false, reason: 'no-tab' };
 
     for (const entry of BLOCKED) {
@@ -46,7 +53,17 @@ UC.origins = (function () {
     }
 
     if (parsed.protocol === 'file:') {
-      return { ok: false, reason: 'file' };
+      if (!options || !options.fileAccess) return { ok: false, reason: 'file' };
+      // Local files have no origin to scope a permission to, so they get the
+      // one-click unlock only. `local` tells the popup to say that rather than
+      // offering a toggle whose request would be rejected.
+      return {
+        ok: true,
+        local: true,
+        origin: 'file://',
+        host: decodeURIComponent(parsed.pathname.split('/').pop()) || 'Local file',
+        pattern: 'file:///*',
+      };
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { ok: false, reason: 'unsupported' };

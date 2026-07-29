@@ -55,6 +55,26 @@ test('file and unsupported schemes are refused separately', () => {
   assert.equal(classify(undefined).reason, 'no-tab');
 });
 
+test('a local file is unlockable once the browser has granted file access', () => {
+  // Refusing every file URL even after the user turned the setting on would
+  // leave the popup telling them to enable something already enabled.
+  const info = classify('file:///C:/docs/notes.html', { fileAccess: true });
+  assert.equal(info.ok, true);
+  assert.equal(info.local, true);
+  assert.equal(info.host, 'notes.html');
+});
+
+test('a local file is still refused when file access is off', () => {
+  assert.equal(classify('file:///C:/notes.html', { fileAccess: false }).reason, 'file');
+  assert.match(messageFor('file'), /Allow access to file URLs/);
+});
+
+test('file access does not make browser pages or the store unlockable', () => {
+  // The option only relaxes the file scheme, never the hard blocks.
+  assert.equal(classify('chrome://settings', { fileAccess: true }).ok, false);
+  assert.equal(classify('https://chromewebstore.google.com/x', { fileAccess: true }).ok, false);
+});
+
 test('patterns stay origin scoped, so granting https never implies http', () => {
   assert.equal(patternFor('https://example.com'), 'https://example.com/*');
   assert.equal(patternFor('https://example.com/'), 'https://example.com/*');

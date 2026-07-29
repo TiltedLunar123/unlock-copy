@@ -62,10 +62,19 @@
       el.primaryNote.textContent = '';
     }
 
+    // A local file has no origin to scope a permission to, so there is nothing
+    // to remember. Saying so beats a toggle that silently refuses.
     el.always.checked = !!state.always;
-    el.alwaysSub.textContent = state.pendingGrant
-      ? 'Needs permission on this device. Turn on to grant it.'
-      : "Runs before the site's code. Asks once.";
+    el.always.disabled = !!state.local;
+    el.always.closest('.row').setAttribute('aria-disabled', String(!!state.local));
+
+    if (state.local) {
+      el.alwaysSub.textContent = "Local files can't be remembered, only unlocked per page.";
+    } else if (state.pendingGrant) {
+      el.alwaysSub.textContent = 'Needs permission on this device. Turn on to grant it.';
+    } else {
+      el.alwaysSub.textContent = "Runs before the site's code. Asks once.";
+    }
 
     for (const input of document.querySelectorAll('[data-feature]')) {
       input.checked = !!state.features[input.dataset.feature];

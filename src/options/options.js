@@ -62,13 +62,11 @@
       button.type = 'button';
       button.textContent = 'Remove';
       button.addEventListener('click', async () => {
-        await UC.settings.writeSite(origin, { always: false });
-        try {
-          await api.permissions.remove({ origins: [UC.origins.patternFor(origin)] });
-        } catch {
-          /* already gone */
-        }
-        await api.runtime.sendMessage({ type: 'unlock-copy/reconcile' });
+        // Routed through the background rather than writing storage from here.
+        // Every mutation happening in one context is what lets the settings
+        // queue actually serialise them; a second writer in this page would
+        // reintroduce the lost-update race it exists to prevent.
+        await api.runtime.sendMessage({ type: 'unlock-copy/forget-site', origin });
         await loadSites();
       });
       li.appendChild(button);
@@ -79,8 +77,11 @@
 
   for (const input of document.querySelectorAll('[data-feature]')) {
     input.addEventListener('change', async (event) => {
-      await UC.settings.writeDefaults({
-        [event.target.dataset.feature]: event.target.checked,
+      await api.runtime.sendMessage({
+        type: 'unlock-copy/set-feature',
+        feature: event.target.dataset.feature,
+        value: event.target.checked,
+        scope: 'global',
       });
     });
   }

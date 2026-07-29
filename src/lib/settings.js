@@ -14,6 +14,29 @@ UC.settings = (function () {
   const KEY_DEFAULTS = 'defaults';
   const KEY_SITES = 'sites';
 
+  /**
+   * Every mutation is a read-modify-write over the whole `sites` object, so two
+   * of them in flight at once means the second overwrites the first's change
+   * rather than merging with it. Flipping two switches quickly, or having the
+   * popup and the options page both open, is enough to trigger it.
+   *
+   * Chaining them costs nothing at this volume and removes the race entirely,
+   * provided every write goes through here. That is why the options page sends
+   * messages to the background instead of writing storage itself.
+   */
+  let queue = Promise.resolve();
+
+  function serialize(work) {
+    const run = queue.then(work, work);
+    // Keep the chain alive even when one link rejects, or a single failed write
+    // would wedge every write after it.
+    queue = run.then(
+      () => {},
+      () => {}
+    );
+    return run;
+  }
+
   async function readAll() {
     try {
       const raw = await UC.api.storage.sync.get([KEY_DEFAULTS, KEY_SITES]);
@@ -38,24 +61,28 @@ UC.settings = (function () {
     };
   }
 
-  async function writeSite(origin, patch) {
-    const { sites } = await readAll();
-    const next = Object.assign({}, sites[origin] || {}, patch);
-    // Drop entries that carry no information rather than accumulating them.
-    if (!next.always && (!next.overrides || Object.keys(next.overrides).length === 0)) {
-      delete sites[origin];
-    } else {
-      sites[origin] = next;
-    }
-    await UC.api.storage.sync.set({ [KEY_SITES]: sites });
-    return sites;
+  function writeSite(origin, patch) {
+    return serialize(async () => {
+      const { sites } = await readAll();
+      const next = Object.assign({}, sites[origin] || {}, patch);
+      // Drop entries that carry no information rather than accumulating them.
+      if (!next.always && (!next.overrides || Object.keys(next.overrides).length === 0)) {
+        delete sites[origin];
+      } else {
+        sites[origin] = next;
+      }
+      await UC.api.storage.sync.set({ [KEY_SITES]: sites });
+      return sites;
+    });
   }
 
-  async function writeDefaults(patch) {
-    const { defaults } = await readAll();
-    const next = Object.assign({}, defaults, patch);
-    await UC.api.storage.sync.set({ [KEY_DEFAULTS]: next });
-    return next;
+  function writeDefaults(patch) {
+    return serialize(async () => {
+      const { defaults } = await readAll();
+      const next = Object.assign({}, defaults, patch);
+      await UC.api.storage.sync.set({ [KEY_DEFAULTS]: next });
+      return next;
+    });
   }
 
   async function alwaysOrigins() {

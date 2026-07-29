@@ -121,8 +121,29 @@ UC.registry = (function () {
     }
   }
 
+  /**
+   * Serialised for the same reason writes are.
+   *
+   * reconcile() reads three sources, decides, then acts. Two overlapping runs
+   * can each decide against a snapshot that the other has already invalidated,
+   * and the classic outcome is one run unregistering an origin the other just
+   * registered: storage says always, the permission is held, and no content
+   * script is running. Callers arrive from permission events, the popup and the
+   * options page, so overlap is ordinary rather than exotic.
+   */
+  let queue = Promise.resolve();
+
+  function reconcile() {
+    const run = queue.then(reconcileNow, reconcileNow);
+    queue = run.then(
+      () => {},
+      () => {}
+    );
+    return run;
+  }
+
   /** Bring registrations in line with storage and permissions. */
-  async function reconcile() {
+  async function reconcileNow() {
     const wanted = await UC.settings.alwaysOrigins();
     const granted = await grantedOrigins(wanted);
     const ids = await currentIds();
