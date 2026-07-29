@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { loadLib, plain, STUB_CHROME } from './helper.mjs';
+
+const ctx = await loadLib(['lib/browser.js', 'lib/policy.js'], { chrome: STUB_CHROME });
+const { DEFAULTS, FEATURES, resolve, diff, forPage, CSS } = ctx.UC.policy;
+
+test('a fresh install has everything on except aggressive mode', () => {
+  const resolved = resolve(null, null);
+  assert.equal(resolved.selection, true);
+  assert.equal(resolved.contextmenu, true);
+  assert.equal(resolved.keyboard, true);
+  assert.equal(resolved.cleanCopy, true);
+  assert.equal(resolved.aggressive, false);
+});
+
+test('site overrides beat globals, and only where they are set', () => {
+  const globals = { ...DEFAULTS, keyboard: false };
+  const resolved = resolve(globals, { selection: false });
+  assert.equal(resolved.selection, false, 'override applies');
+  assert.equal(resolved.keyboard, false, 'global still applies where no override');
+  assert.equal(resolved.contextmenu, true);
+});
+
+test('resolve always returns every feature, never a sparse object', () => {
+  const resolved = resolve({}, {});
+  assert.deepEqual(Object.keys(resolved).sort(), [...FEATURES].sort());
+});
+
+test('diff stores only what differs, so changing a default still propagates', () => {
+  const globals = { ...DEFAULTS };
+  const resolved = resolve(globals, null);
+
+  assert.deepEqual(plain(diff(globals, resolved)), {}, 'matching the default stores nothing');
+
+  const changed = { ...resolved, contextmenu: false };
+  assert.deepEqual(plain(diff(globals, changed)), { contextmenu: false });
+});
+
+test('diff is relative to the current globals, not to the shipped defaults', () => {
+  // A user who turned keyboard off globally and then on for one site must end
+  // up with an override, or the site switch silently does nothing.
+  const globals = { ...DEFAULTS, keyboard: false };
+  const resolved = { ...resolve(globals, null), keyboard: true };
+  assert.deepEqual(plain(diff(globals, resolved)), { keyboard: true });
+});
+
+test('the page payload is booleans plus a known mode', () => {
+  const page = forPage({ selection: 1, contextmenu: 0 }, 'early');
+  assert.equal(page.enabled, true);
+  assert.equal(page.selection, true, 'truthy is normalised to a boolean');
+  assert.equal(page.contextmenu, false);
+  assert.equal(page.mode, 'early');
+});
+
+test('an unrecognised mode falls back to late, never to early', () => {
+  // Early means "we got here before page script". Guessing that wrongly would
+  // skip the capture net and quietly stop working on the hard cases.
+  assert.equal(forPage(DEFAULTS, 'nonsense').mode, 'late');
+  assert.equal(forPage(DEFAULTS, undefined).mode, 'late');
+});
+
+test('the stylesheet forces selection back on with !important', () => {
+  assert.match(CSS, /user-select:text !important/);
+  assert.match(CSS, /-webkit-user-select:text !important/);
+  assert.match(CSS, /::selection/);
+});

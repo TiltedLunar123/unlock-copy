@@ -1,0 +1,239 @@
+/* Unlock Copy popup. One primary action, one persistence control, four switches. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #17181c;
+  --muted: #63666e;
+  --line: #e4e6ea;
+  --accent: #1f8b4c;
+  --accent-fg: #ffffff;
+  --accent-soft: #eaf5ee;
+  --track: #cdd0d6;
+  --focus: #2b6cb0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1d21;
+    --fg: #f2f3f5;
+    --muted: #a1a5ad;
+    --line: #34363c;
+    --accent: #35b06a;
+    --accent-fg: #10231a;
+    --accent-soft: #1e2f26;
+    --track: #4a4d55;
+    --focus: #7ab7ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 300px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+#app {
+  padding: 12px;
+}
+
+.site {
+  padding: 0 2px 10px;
+}
+
+.site-host {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+/* ---- primary action ---- */
+
+.primary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.primary:hover {
+  filter: brightness(1.06);
+}
+
+.primary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The unlocked state is deliberately quiet: it is a status, not a call to action. */
+.primary[data-on="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.primary-label {
+  font-size: 14px;
+}
+
+.primary-note {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.primary-note:empty {
+  display: none;
+}
+
+/* ---- rows ---- */
+
+.group {
+  margin: 16px 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.features {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+  cursor: pointer;
+}
+
+.row-always {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-title {
+  display: block;
+}
+
+.row-sub {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.row[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- switch ---- */
+
+.switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--track);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 120ms ease;
+}
+
+.switch:checked {
+  background: var(--accent);
+}
+
+.switch:checked::after {
+  transform: translateX(14px);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---- blocked state ---- */
+
+.blocked-message {
+  margin: 4px 2px 8px;
+  color: var(--muted);
+}
+
+/* ---- footer ---- */
+
+footer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  text-align: right;
+}
+
+footer a {
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+footer a:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+
+footer a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch,
+  .switch::after {
+    transition: none;
+  }
+}

@@ -153,17 +153,43 @@ listeners for entirely legitimate reasons. Not calling them breaks the page. Cal
 with an event they cannot cancel preserves every side effect they wanted while removing
 the only capability being abused. Wrap, never drop.
 
-Hostile types wrapped by default: `copy`, `cut`, `beforecopy`, `contextmenu`,
-`selectstart`, `select`, `dragstart`. Behind the keyboard switch: `keydown`, `keypress`,
-`keyup`. Behind aggressive mode only: `mousedown`, `mouseup`, `paste`. `paste` is never
-touched by default because breaking paste in an editor is far worse than the problem
-being solved.
+Hostile types: `copy`, `cut`, `beforecopy`, `beforecut`, `selectstart`, `select`,
+`dragstart` under the selection switch, `contextmenu` under its own, `keydown` /
+`keypress` / `keyup` under the keyboard switch, and `mousedown` / `mouseup` / `paste` /
+`beforepaste` only under aggressive mode. `paste` is never touched by default because
+breaking paste inside an editor is far worse than the problem being solved.
 
-**Editor exemption.** If the event target is inside an `input`, `textarea`,
-`[contenteditable]`, `[role="textbox"]`, or a known editor root (`.CodeMirror`,
-`.cm-editor`, `.monaco-editor`, `.ProseMirror`, `.ql-editor`, `[data-slate-editor]`),
-the wrapper calls through untouched. Without this the extension is another
-"breaks Google Docs" one-star magnet. Both drafts agreed on this; it is load-bearing.
+**Whether to wrap and whether to neuter are separate questions.** Every type in that
+whole list is wrapped on registration regardless of the current switches; the wrapper
+decides at call time whether to actually neuter. Consulting the policy at registration
+instead would mean a switch turned on after page load did nothing to listeners already
+registered, so the user would see a switch that only works if they reload first.
+
+**Editor exemption.** If the event target is inside `[contenteditable]`, `[role=textbox]`
+or a known editor root (`.CodeMirror`, `.cm-editor`, `.monaco-editor`, `.ProseMirror`,
+`.ql-editor`, `.ace_editor`, `[data-slate-editor]`), the wrapper calls through untouched.
+Without this the extension is another "breaks Google Docs" one-star magnet. Both drafts
+agreed on this; it is load-bearing.
+
+A plain `input`, `textarea` or `select` is deliberately **not** exempt. Those have no
+custom copy semantics worth preserving, and exempting them means a site with a blanket
+copy ban still blocks copying out of its own comment box, which is one of the things
+people install this to fix.
+
+### 4.2a Inline attributes, which the wrapper cannot reach
+
+An inline `oncopy="return false"` never goes through `addEventListener`, and it does not
+cancel by calling `preventDefault` either: it cancels through its *return value*, which
+the engine processes internally rather than through the JS-visible method. Shadowing
+`preventDefault` therefore does nothing to it. The only counter is to remove the
+attribute.
+
+That becomes a race as soon as the page puts it back from its own `MutationObserver`, and
+a race against a tight loop is not a fix. So `Element.prototype.setAttribute` is patched
+to ignore writes of a hostile `on*` attribute outside editors. The page's observer fires,
+calls `setAttribute`, and nothing happens. The initial parse-time attributes are still
+removed by the sweep, and the observer stays as cover for `innerHTML` rewrites, which the
+parser applies without going through `setAttribute`.
 
 Also patched at document_start:
 
@@ -176,6 +202,21 @@ Also patched at document_start:
 - `Element.prototype.attachShadow`, which stores every root it creates in a `WeakMap`,
   including closed ones. This is the only way to reach a closed root, and it only works
   for roots created after the patch. Roots created before it are unreachable, full stop.
+
+### 4.2b Which mode am I in, and why the default is "early"
+
+The engine has to pick a mode before anything can tell it which one it is in. A registered
+content script runs at `document_start` and the bridge cannot answer until a message round
+trip has completed, by which point the patches are already installed. The late path, by
+contrast, always writes a boot payload immediately before injecting the file.
+
+So "late" is the case that can always announce itself, and "early" is therefore the
+correct default. Defaulting the other way is not a small mistake: every always-unlocked
+site would install the blunt capture net instead of wrapping, silently dropping the
+legitimate copy handlers that wrapping exists to preserve, and would skip the
+`attachShadow` patch entirely. The end-to-end suite would still pass, because the net is
+strictly more aggressive than wrapping. That combination, wrong in a way the tests cannot
+see, is why it is written down here.
 
 ### 4.3 Event blocking, late pass, and its one real hole
 
@@ -274,6 +315,10 @@ Restricted-page states, shown in place of the primary button:
 | `file://` without the file-URLs grant | Turn on "Allow access to file URLs" in extension settings. |
 | No tab | No active tab. |
 
+Once the file-URLs grant is on, local files are unlockable, but only per page: `file://`
+has no origin for a permission to be scoped to, so the "always unlock" toggle is disabled
+there with a reason rather than offered and then silently refused.
+
 ## 6. Tests
 
 `test-pages/blockers.html` reproduces every technique in section 4 as numbered cases,
@@ -309,7 +354,27 @@ Concrete rules the build enforces so they cannot rot:
 - no `eval`, `new Function` or `importScripts` in the background bundle
 - every icon declared in the manifest exists and is actually that size
 
-## 8. Open items
+## 8. Review pass
+
+The implementation was reviewed adversarially against this plan once it was working and
+green. That found three defects the tests could not see, all now fixed and all recorded
+above because each one is the kind that grows back:
+
+- the mode default was `late`, so the always-unlock path installed the capture net and
+  skipped `attachShadow`, inverting the wrap-never-drop rule in exactly the mode meant to
+  honour it best (4.2b)
+- session state was cleared only when `changeInfo.url` was present, which a reload does
+  not set, so the badge read ON over a page where copying had been blocked again
+- the overlay shield handler was registered after the capture net on the same target and
+  phase, so under aggressive mode the net stopped `mousedown` first and the shield handler
+  was dead code in precisely the configuration that needs it
+
+Also fixed from the same pass: wrapping consulted the live policy at registration time,
+storage and reconcile both had lost-update races under concurrent writes, the editor
+exemption covered plain form fields, `Selection.removeAllRanges` was blocked even for
+editors clearing their own selection, and local files were refused even with the grant on.
+
+## 9. Open items
 
 - ASSUMED: `contextmenu` with `stopImmediatePropagation()` and no `preventDefault()`
   still shows the native menu on both engines. Asserted by E2E rather than trusted.

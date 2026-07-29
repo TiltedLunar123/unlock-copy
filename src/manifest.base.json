@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Unlock Copy - Enable Right Click & Copy",
+  "version": "1.0.0",
+  "description": "Restore text selection, copy, right-click and keyboard shortcuts on sites that block them. No account, no tracking, no host access until you ask.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["*://*/*"],
+  "action": {
+    "default_title": "Unlock Copy",
+    "default_popup": "popup/popup.html"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "toggle-unlock": {
+      "suggested_key": {
+        "default": "Alt+Shift+U"
+      },
+      "description": "Unlock or relock the current page"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  }
+}

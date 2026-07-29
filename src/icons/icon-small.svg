@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Unlock Copy, small sizes</title>
+  <!--
+    The 16 and 32px artwork, deliberately not a downscale of icon.svg.
+    Two lessons are baked in here:
+      - the card stack and text bars of the full mark blur into one mass at
+        16px, so this drops to two shapes and a punched keyhole;
+      - a shackle hinged on the body closes into a loop with a tail, which
+        renders as a "6" once antialiasing takes over. Floating it clear of the
+        body and pushing it right of centre keeps two distinct shapes and reads
+        as sprung open rather than merely drawn badly.
+  -->
+  <defs>
+    <linearGradient id="tileSmall" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2fb96d" />
+      <stop offset="1" stop-color="#12703c" />
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#tileSmall)" />
+
+  <path
+    d="M58 48 V38 a16 16 0 0 1 32 0 V48"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="12"
+    stroke-linecap="round"
+  />
+
+  <rect x="24" y="62" width="72" height="46" rx="10" fill="#ffffff" />
+  <rect x="53" y="77" width="14" height="17" rx="7" fill="#12703c" />
+</svg>
