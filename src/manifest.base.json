@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Unlock Copy - Enable Right Click & Copy",
   "version": "1.0.0",
-  "description": "Restore text selection, copy, right-click and keyboard shortcuts on sites that block them. No account, no tracking, no host access until you ask.",
+  "description": "Restore copy, text selection, right-click and keyboard shortcuts on sites that block them. Nothing is tracked and nothing is sent.",
   "permissions": ["activeTab", "scripting", "storage"],
   "optional_host_permissions": ["*://*/*"],
   "action": {

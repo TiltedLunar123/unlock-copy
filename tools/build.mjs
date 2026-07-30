@@ -45,6 +45,18 @@ const STATIC_DIRS = ['content', 'popup', 'options', 'icons', 'lib'];
  */
 const ALLOWED_PERMISSIONS = ['activeTab', 'scripting', 'storage'];
 const ALLOWED_OPTIONAL_HOSTS = ['*://*/*'];
+
+/**
+ * Chrome Web Store field limits.
+ *
+ * Both of these are rejected at upload time, not at load time, so a manifest
+ * that is perfectly valid locally can still fail on submission. The 132 was
+ * learned the hard way: a 145 character description built, loaded and ran fine,
+ * then bounced from the store with "It exceeds maximum size limit of 132
+ * characters". Cheaper to fail here than after packaging.
+ */
+const MAX_DESCRIPTION = 132;
+const MAX_NAME = 75;
 /**
  * `content_scripts` is forbidden on purpose. Declaring one statically would
  * require host permissions at install time, which is exactly the install
@@ -169,6 +181,18 @@ async function check(base) {
       problems.push(`${tag} version drifted from base manifest`);
     }
 
+    if ((manifest.description ?? '').length > MAX_DESCRIPTION) {
+      problems.push(
+        `${tag} description is ${manifest.description.length} characters, ` +
+          `over the store limit of ${MAX_DESCRIPTION}`
+      );
+    }
+    if ((manifest.name ?? '').length > MAX_NAME) {
+      problems.push(
+        `${tag} name is ${manifest.name.length} characters, over the store limit of ${MAX_NAME}`
+      );
+    }
+
     for (const [size, rel] of Object.entries(manifest.icons ?? {})) {
       const file = path.join(dir, rel);
       let buf;
@@ -249,7 +273,7 @@ async function check(base) {
     process.exit(1);
   }
   console.log(
-    'Release gate passed: permissions, optional hosts, icons, pages, content scripts, no remote code, no network.'
+    'Release gate passed: permissions, optional hosts, store field limits, icons, pages, content scripts, no remote code, no network.'
   );
 }
 
