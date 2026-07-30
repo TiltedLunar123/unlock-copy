@@ -1,16 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <title>Unlock Copy</title>
   <!--
-    Two ideas in one mark: the offset double card is the universal copy glyph,
-    and the shackle above it is sprung clear of the body rather than seated on
-    it. Pushing the shackle right of centre and leaving a real gap under both
-    legs is what makes "open" legible; a shackle hinged into the body closes
-    into a loop with a tail and reads as a digit once it gets small.
+    A pointer at the end of a run of selected text. It depicts the thing the
+    extension gives back, rather than the abstraction: you dragged across text
+    the site tried to make unselectable, and the cursor is sitting where the
+    selection ends.
 
-    See icon-small.svg for the 16 and 32px artwork, which drops the card stack.
+    Three decisions worth keeping:
+
+    - No padlock. Every extension in this category uses one, and a padlock says
+      "security" rather than "copy text". It also closed into a loop with a tail
+      and rendered as the digit 6 at 16px.
+    - The selection is two solid slabs, not thin lines of text. Bars slim enough
+      to read as text at 128px are under a pixel at 16px and merge into a green
+      blur, which is the single most common way an extension icon turns to mush.
+    - The pointer is drawn twice: once as a fat stroke in the tile's own
+      gradient, then filled white on top. That knockout is what stops a white
+      pointer from dissolving into the white slab it overlaps. The gradient uses
+      userSpaceOnUse so the halo matches the tile exactly at every point.
+
+    See icon-small.svg for the 16 and 32px artwork, which is redrawn rather than
+    scaled.
   -->
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="4" y1="4" x2="124" y2="124">
       <stop offset="0" stop-color="#2fb96d" />
       <stop offset="1" stop-color="#12703c" />
     </linearGradient>
@@ -18,18 +31,16 @@
 
   <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#tile)" />
 
+  <!-- Selected text: a full line, then a partial one ending at the pointer. -->
+  <rect x="22" y="25" width="74" height="22" rx="7" fill="#ffffff" />
+  <rect x="22" y="60" width="50" height="22" rx="7" fill="#ffffff" />
+
   <path
-    d="M62 47 V37 a15 15 0 0 1 30 0 V47"
+    d="M58 47 L58 95 L70.7 83.2 L79.7 103.2 L88.7 99.2 L79.7 79.4 L96.4 78.2 Z"
     fill="none"
-    stroke="#ffffff"
-    stroke-width="10"
-    stroke-linecap="round"
+    stroke="url(#tile)"
+    stroke-width="11"
+    stroke-linejoin="round"
   />
-
-  <!-- Back card held to 42% so the stack reads as depth, not as clutter. -->
-  <rect x="26" y="57" width="48" height="44" rx="7" fill="#ffffff" fill-opacity="0.42" />
-  <rect x="42" y="65" width="56" height="44" rx="7" fill="#ffffff" />
-
-  <rect x="53" y="78" width="34" height="6" rx="3" fill="#12703c" />
-  <rect x="53" y="90" width="22" height="6" rx="3" fill="#12703c" />
+  <path d="M58 47 L58 95 L70.7 83.2 L79.7 103.2 L88.7 99.2 L79.7 79.4 L96.4 78.2 Z" fill="#ffffff" />
 </svg>
