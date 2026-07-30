@@ -1,0 +1,20 @@
+{
+  "voice": "af_heart",
+  "speed": 1.05,
+  "gap": 0.22,
+  "lines": [
+    { "scene": "problem", "text": "Some sites will not let you copy." },
+    { "scene": "problem", "text": "You drag across the text, and nothing happens." },
+    { "scene": "fix", "text": "Unlock Copy puts it back." },
+    { "scene": "fix", "text": "One click, and the page behaves normally again." },
+    { "scene": "fix", "text": "Select text. Right click. Control C." },
+    { "scene": "always", "text": "For a site you use often, switch on Always unlock." },
+    { "scene": "always", "text": "From then on, it runs before the site's own code." },
+    { "scene": "always", "text": "That is the only thing that beats a page determined to stop you." },
+    { "scene": "gentle", "text": "It leaves working sites alone." },
+    { "scene": "gentle", "text": "Copy buttons and text editors keep doing what they were doing." },
+    { "scene": "perms", "text": "And a fresh install cannot read a single website." },
+    { "scene": "perms", "text": "It asks for one site at a time, only when you ask it to." },
+    { "scene": "outro", "text": "Free, open source, and nothing is tracked." }
+  ]
+}
