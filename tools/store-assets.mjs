@@ -192,6 +192,43 @@ function slides() {
       </div>`
     ),
 
+    /*
+     * YouTube thumbnail.
+     *
+     * Near-black rather than the brand green used everywhere else, because a
+     * thumbnail competes in a sidebar full of bright green and blue tiles and
+     * has to win on contrast, not on matching the rest of the listing. The
+     * headline is sized to survive the 210px wide slot YouTube actually shows
+     * it in most of the time, which is why it is four words and not a sentence.
+     *
+     * The screenshot is the real unlocked capture, so the one legible detail at
+     * small size is a blue selection highlight, which is the entire product.
+     */
+    'yt-thumbnail': page(
+      1280,
+      720,
+      `<div class="wrap" style="background:#0d1512;position:relative;overflow:hidden">
+        <div style="position:absolute;left:-180px;top:-160px;width:760px;height:760px;border-radius:50%;
+                    background:radial-gradient(circle,rgba(47,185,109,.30) 0%,rgba(13,21,18,0) 70%)"></div>
+        <img src="demo-after.png" style="position:absolute;left:668px;top:88px;width:720px;
+             border-radius:14px;transform:rotate(-4deg);box-shadow:0 34px 80px rgba(0,0,0,.62);
+             border:1px solid rgba(255,255,255,.10)">
+        <div style="position:absolute;left:62px;top:120px;width:640px;z-index:2">
+          <p style="font-size:24px;font-weight:700;letter-spacing:.14em;color:#35d17e">CHROME + FIREFOX</p>
+          <p style="font-size:112px;font-weight:800;line-height:.96;letter-spacing:-0.035em;color:#fff;margin-top:16px">
+            CAN'T COPY?
+          </p>
+          <p style="font-size:112px;font-weight:800;line-height:.96;letter-spacing:-0.035em;color:#35d17e">
+            FIXED.
+          </p>
+          <p style="font-size:27px;color:rgba(255,255,255,.72);margin-top:26px">
+            One click. Any site. No tracking.
+          </p>
+        </div>
+        <img src="icon-128.png" style="position:absolute;left:62px;bottom:46px;width:62px;height:62px;z-index:2">
+      </div>`
+    ),
+
     /* Promo tiles. Small one has room for a mark and four words, no more. */
     'tile-small': page(
       440,
@@ -501,6 +538,7 @@ async function main() {
     const sizes = {
       's1-hero': [1280, 800], 's2-before-after': [1280, 800], 's3-always': [1280, 800],
       's4-limits': [1280, 800], 's5-privacy': [1280, 800],
+      'yt-thumbnail': [1280, 720],
       'tile-small': [440, 280], 'tile-marquee': [1400, 560],
     };
     for (const [name, [w, h]] of Object.entries(sizes)) {
