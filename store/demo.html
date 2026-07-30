@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>The Milford Review</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #fbfbfa;
+        color: #1b1c1f;
+        font: 16px/1.7 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 40px;
+        border-bottom: 1px solid #e6e6e4;
+        background: #fff;
+      }
+      .brand {
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      nav {
+        display: flex;
+        gap: 22px;
+        font-size: 14px;
+        color: #6a6c72;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 44px 40px 60px;
+      }
+      .kicker {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #1f8b4c;
+      }
+      h1 {
+        margin: 0 0 14px;
+        font-size: 36px;
+        line-height: 1.18;
+        letter-spacing: -0.02em;
+      }
+      .byline {
+        margin: 0 0 30px;
+        font-size: 14px;
+        color: #6a6c72;
+      }
+      p {
+        margin: 0 0 20px;
+      }
+      blockquote {
+        margin: 26px 0;
+        padding: 2px 0 2px 20px;
+        border-left: 3px solid #1f8b4c;
+        font-size: 18px;
+        color: #33353b;
+      }
+
+      /*
+        The point of the fixture: this page is locked the way real ones are.
+        A CSS lock the page reasserts with !important, plus handlers in script
+        below. Nothing here is exotic; it is the ordinary combination.
+      */
+      main,
+      main * {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+      }
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <span class="brand">The Milford Review</span>
+      <nav><span>Reporting</span><span>Essays</span><span>Archive</span><span>Subscribe</span></nav>
+    </header>
+
+    <main id="article">
+      <p class="kicker">Field notes</p>
+      <h1>The quiet economics of the municipal water tower</h1>
+      <p class="byline">By R. Ostrander &middot; 11 min read</p>
+
+      <p id="p1">
+        Every town of a certain size owns one, and almost nobody who lives under it can say
+        what it cost. The tower on the hill above Milford holds 640,000 gallons, went up in
+        1974, and has been repainted four times since, most recently in a shade the council
+        minutes describe only as "approved gray."
+      </p>
+
+      <blockquote id="q1">
+        The pressure in your kitchen tap is a decision somebody made in a meeting, and it is
+        almost always the same decision: put the tank where gravity is free.
+      </blockquote>
+
+      <p id="p2">
+        Water towers are a bet on elevation. Lift the water once, overnight, when power is
+        cheap, then let the weight of it do the distribution all day for nothing. A tank
+        sitting 120 feet up delivers roughly 52 pounds per square inch at the ground, which
+        is why the height of the tower and the pressure at your sink are the same fact
+        written two ways.
+      </p>
+
+      <p id="p3">
+        The maintenance schedule is where the real money hides. Interior coatings last
+        twenty to thirty years, and draining a tower to recoat it means running the system
+        on pumps alone for a season, which is the expensive way to do what gravity was
+        doing free.
+      </p>
+    </main>
+
+    <script>
+      // The ordinary set: cancel selection, cancel copy, cancel the menu.
+      const article = document.getElementById('article');
+      article.addEventListener('selectstart', (e) => e.preventDefault(), true);
+      document.addEventListener('copy', (e) => e.preventDefault(), true);
+      document.addEventListener('contextmenu', (e) => e.preventDefault(), true);
+      document.addEventListener(
+        'keydown',
+        (e) => {
+          if ((e.ctrlKey || e.metaKey) && ['c', 'a', 'x'].includes(String(e.key).toLowerCase())) {
+            e.preventDefault();
+          }
+        },
+        true
+      );
+      // And put the CSS lock back if anything strips it.
+      new MutationObserver(() => {
+        article.style.setProperty('user-select', 'none', 'important');
+      }).observe(article, { attributes: true, attributeFilter: ['style'] });
+    </script>
+  </body>
+</html>
