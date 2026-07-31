@@ -94,7 +94,7 @@ and pick `dist/chrome`.
 Firefox: go to `about:debugging`, choose "This Firefox", then "Load Temporary Add-on" and
 pick `dist/firefox/manifest.json`.
 
-Neither store has a listing yet.
+Submitted to addons.mozilla.org and awaiting review.
 
 ## Development
 
