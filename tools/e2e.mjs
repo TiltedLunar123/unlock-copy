@@ -83,6 +83,8 @@ const CASES = [
       "f.contentWindow.getSelection().selectAllChildren(f.contentDocument.getElementById('t14')); })()",
     refocus: true,
   },
+  { id: '15', label: 'cancels through Event.prototype', sel: '#t15', expect: 'UNLOCKCOPY-15-PROTOCANCEL' },
+  { id: '16', label: 'async clipboard hijack', sel: '#t16', expect: 'UNLOCKCOPY-16-ASYNCHIJACK' },
   {
     id: 'E',
     label: 'editor keeps its own copy handler',

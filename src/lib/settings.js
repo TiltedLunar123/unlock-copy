@@ -37,16 +37,24 @@ UC.settings = (function () {
     return run;
   }
 
+  /**
+   * `ok` is not decoration. The fallback for a failed read is an empty site
+   * list, which is a fine answer for a reader (fall back to defaults) and a
+   * catastrophic one for a writer: every mutation here is a read-modify-write
+   * over the whole `sites` object, so merging a patch into `{}` and storing it
+   * deletes every other origin the user had saved. Writers check this.
+   */
   async function readAll() {
     try {
       const raw = await UC.api.storage.sync.get([KEY_DEFAULTS, KEY_SITES]);
       return {
+        ok: true,
         defaults: Object.assign({}, UC.policy.DEFAULTS, raw[KEY_DEFAULTS] || {}),
         sites: raw[KEY_SITES] || {},
       };
     } catch {
       // A profile with sync disabled or over quota must still work locally.
-      return { defaults: Object.assign({}, UC.policy.DEFAULTS), sites: {} };
+      return { ok: false, defaults: Object.assign({}, UC.policy.DEFAULTS), sites: {} };
     }
   }
 
@@ -63,7 +71,12 @@ UC.settings = (function () {
 
   function writeSite(origin, patch) {
     return serialize(async () => {
-      const { sites } = await readAll();
+      const state = await readAll();
+      // Refusing loudly beats writing a truncated list. The caller surfaces the
+      // failure and the user retries; the alternative silently drops every
+      // other saved site and the user finds out weeks later.
+      if (!state.ok) throw new Error('settings unavailable');
+      const { sites } = state;
       const next = Object.assign({}, sites[origin] || {}, patch);
       // Drop entries that carry no information rather than accumulating them.
       if (!next.always && (!next.overrides || Object.keys(next.overrides).length === 0)) {
@@ -78,8 +91,9 @@ UC.settings = (function () {
 
   function writeDefaults(patch) {
     return serialize(async () => {
-      const { defaults } = await readAll();
-      const next = Object.assign({}, defaults, patch);
+      const state = await readAll();
+      if (!state.ok) throw new Error('settings unavailable');
+      const next = Object.assign({}, state.defaults, patch);
       await UC.api.storage.sync.set({ [KEY_DEFAULTS]: next });
       return next;
     });

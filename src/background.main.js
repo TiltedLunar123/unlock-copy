@@ -67,6 +67,38 @@
    * its policy on the very first statement it runs, rather than starting on
    * defaults and being corrected a round trip later.
    */
+  /**
+   * Insert the selection stylesheet exactly once per tab.
+   *
+   * The remove is not redundant. A tab collects several inserts over its life:
+   * the toolbar unlock, then "always unlock" applying immediately, then every
+   * feature toggle. If those stack, the single remove that `lock` performs
+   * peels off one layer and leaves the rest, so relocking a page appears to do
+   * nothing to selection until a reload. Removing first makes the insert
+   * idempotent regardless of how the browser counts them.
+   */
+  async function applyCss(tabId) {
+    const target = { tabId, allFrames: true };
+    try {
+      await api.scripting.removeCSS({ target, origin: 'USER', css: UC.policy.CSS });
+    } catch {
+      /* nothing inserted yet, which is the state we wanted */
+    }
+    await api.scripting.insertCSS({ target, origin: 'USER', css: UC.policy.CSS });
+  }
+
+  async function dropCss(tabId) {
+    try {
+      await api.scripting.removeCSS({
+        target: { tabId, allFrames: true },
+        origin: 'USER',
+        css: UC.policy.CSS,
+      });
+    } catch {
+      /* the stylesheet was never inserted */
+    }
+  }
+
   async function applyNow(tabId, page) {
     await api.scripting.executeScript({
       target: { tabId, allFrames: true },
@@ -87,11 +119,7 @@
     if (page.selection) {
       // USER origin outranks every author rule, including !important ones and
       // inline styles, so the page cannot take selection back.
-      await api.scripting.insertCSS({
-        target: { tabId, allFrames: true },
-        origin: 'USER',
-        css: UC.policy.CSS,
-      });
+      await applyCss(tabId);
     }
   }
 
@@ -107,15 +135,7 @@
     } catch {
       /* nothing injected there in the first place */
     }
-    try {
-      await api.scripting.removeCSS({
-        target: { tabId, allFrames: true },
-        origin: 'USER',
-        css: UC.policy.CSS,
-      });
-    } catch {
-      /* the stylesheet was never inserted */
-    }
+    await dropCss(tabId);
   }
 
   /* ---------------------------------------------------------------- */
@@ -133,22 +153,28 @@
   function fileAccess() {
     return fileAccessCache === true;
   }
-  (async () => {
+
+  /**
+   * Re-read rather than trusting the cache, on every path that classifies a URL
+   * for the user.
+   *
+   * The setting lives on a browser page this extension never sees change. A
+   * cache filled once at startup goes stale the moment the user turns it on,
+   * and the visible symptom is the keyboard shortcut silently refusing to
+   * unlock a local file that the popup would happily unlock a second later.
+   */
+  async function refreshFileAccess() {
     try {
       fileAccessCache = await api.extension.isAllowedFileSchemeAccess();
     } catch {
       fileAccessCache = false;
     }
-  })();
+    return fileAccess();
+  }
+  refreshFileAccess();
 
   async function getState(tab) {
-    // Re-read on every popup open: the user can flip the toggle at any time and
-    // a stale answer sends them back to a settings page they already changed.
-    try {
-      fileAccessCache = await api.extension.isAllowedFileSchemeAccess();
-    } catch {
-      fileAccessCache = false;
-    }
+    await refreshFileAccess();
     const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) {
       return { ok: false, reason: info.reason, message: UC.origins.messageFor(info.reason) };
@@ -186,6 +212,7 @@
   }
 
   async function unlockOnce(tab) {
+    await refreshFileAccess();
     const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) return { ok: false, reason: info.reason };
 
@@ -211,8 +238,14 @@
    * grant. This function verifies rather than trusting.
    */
   async function setAlways(tab, always) {
+    await refreshFileAccess();
     const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) return { ok: false, reason: info.reason };
+    // A local file has no origin a permission can be scoped to. The popup
+    // disables the toggle, but a disabled control is a UI convention rather
+    // than a guarantee, and the pattern built from `file://` is not one the
+    // browser accepts.
+    if (info.local) return { ok: false, reason: 'local-file' };
 
     const pattern = UC.origins.patternFor(info.origin);
 
@@ -244,6 +277,72 @@
     return { ok: true, always: true };
   }
 
+  /**
+   * Push a policy into one tab, both worlds, so a switch takes effect without a
+   * reload. No `mode`: see UC.policy.forPage for why the caller must not guess
+   * one for a page that is already running.
+   */
+  async function pushToTab(tabId, page) {
+    try {
+      await api.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: 'MAIN',
+        func: (policy) => {
+          if (window.__unlockCopyEngine) window.__unlockCopyEngine.configure(policy);
+        },
+        args: [page],
+      });
+    } catch {
+      /* tab was never unlocked; the next unlock picks the new value up */
+    }
+    try {
+      await api.tabs.sendMessage(tabId, { type: 'unlock-copy/policy-changed', policy: page });
+    } catch {
+      /* no bridge in this tab */
+    }
+    if (page.selection) {
+      try {
+        await applyCss(tabId);
+      } catch {
+        /* no access to this tab right now */
+      }
+    } else {
+      await dropCss(tabId);
+    }
+  }
+
+  /**
+   * Push the current policy to every tab we can reach.
+   *
+   * Aiming this at the active tab alone looks sufficient and is not, because
+   * the options page opens in its own tab: changing a global default there
+   * leaves the active tab as an extension page that classifies as unscriptable,
+   * so the change reaches nothing at all and every unlocked tab keeps the old
+   * switches until it is reloaded. Storage is read once and resolved per origin
+   * here, so a site with its own overrides still gets its own answer.
+   */
+  async function broadcastPolicy() {
+    let tabs = [];
+    try {
+      tabs = await api.tabs.query({});
+    } catch {
+      return;
+    }
+    const { defaults, sites } = await UC.settings.readAll();
+    const pushes = [];
+    for (const target of tabs) {
+      const info = UC.origins.classify(target.url, { fileAccess: fileAccess() });
+      if (!info.ok) continue;
+      const entry = sites[info.origin] || {};
+      const page = UC.policy.forPage(UC.policy.resolve(defaults, entry.overrides));
+      // In parallel, because the popup waits on this before it redraws and a
+      // user with forty tabs open should not watch a switch hang. pushToTab
+      // swallows its own failures, so none of these can reject the batch.
+      pushes.push(pushToTab(target.id, page));
+    }
+    await Promise.all(pushes);
+  }
+
   async function setFeature(tab, feature, value, scope) {
     if (UC.policy.FEATURES.indexOf(feature) === -1) return { ok: false, reason: 'unknown-feature' };
 
@@ -259,52 +358,7 @@
       });
     }
 
-    // Push the change to a tab that is already unlocked, both worlds, so the
-    // switch takes effect without a reload.
-    const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
-    if (info.ok) {
-      const entry = await UC.settings.siteEntry(info.origin);
-      const page = UC.policy.forPage(entry.resolved, entry.always ? 'early' : 'late');
-      try {
-        await api.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: true },
-          world: 'MAIN',
-          func: (policy) => {
-            if (window.__unlockCopyEngine) window.__unlockCopyEngine.configure(policy);
-          },
-          args: [page],
-        });
-      } catch {
-        /* tab was never unlocked; the next unlock picks the new value up */
-      }
-      try {
-        await api.tabs.sendMessage(tab.id, { type: 'unlock-copy/policy-changed', policy: page });
-      } catch {
-        /* no bridge in this tab */
-      }
-      if (page.selection) {
-        try {
-          await api.scripting.insertCSS({
-            target: { tabId: tab.id, allFrames: true },
-            origin: 'USER',
-            css: UC.policy.CSS,
-          });
-        } catch {
-          /* no access to this tab right now */
-        }
-      } else {
-        try {
-          await api.scripting.removeCSS({
-            target: { tabId: tab.id, allFrames: true },
-            origin: 'USER',
-            css: UC.policy.CSS,
-          });
-        } catch {
-          /* nothing to remove */
-        }
-      }
-    }
-
+    await broadcastPolicy();
     return { ok: true };
   }
 
@@ -353,6 +407,13 @@
    * tab id of its own, so the origin comes from the sender.
    */
   async function policyForFrame(sender) {
+    // The bridge only exists on origins the user chose to always unlock, so it
+    // reporting in is proof the engine is running here. Nothing else paints the
+    // badge on this path, and onUpdated clears it on every load, so without
+    // this the sites that are permanently unlocked are the ones whose badge is
+    // permanently blank.
+    if (sender && sender.tab && !sender.frameId) paintBadge(sender.tab.id, true);
+
     let origin = '';
     try {
       origin = new URL(sender.url || (sender.tab && sender.tab.url) || '').origin;
@@ -437,6 +498,8 @@
     setAlways,
     setFeature,
     policyForFrame,
+    pushToTab,
+    broadcastPolicy,
   };
 
   const command = api.commands;

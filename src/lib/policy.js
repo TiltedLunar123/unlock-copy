@@ -44,17 +44,33 @@ UC.policy = (function () {
     return out;
   }
 
-  /** Payload handed to the page engine. */
+  /**
+   * Payload handed to the page engine.
+   *
+   * `mode` is omitted unless the caller genuinely knows it, and the engine only
+   * assigns the keys it is given. Only the code doing the injecting knows how a
+   * page was reached; a later push updating a switch does not, and stamping a
+   * guess onto it is how a late unlock loses the capture net it depends on. The
+   * stored "always unlock this site" flag is not that answer either: it says
+   * what the next load will do, not how the page in front of the user was
+   * already patched.
+   */
   function forPage(resolved, mode) {
-    return {
+    const out = {
       enabled: true,
       selection: !!resolved.selection,
       contextmenu: !!resolved.contextmenu,
       keyboard: !!resolved.keyboard,
       cleanCopy: !!resolved.cleanCopy,
       aggressive: !!resolved.aggressive,
-      mode: mode === 'early' ? 'early' : 'late',
     };
+    // Absent and wrong are different answers. Absent means "you already know
+    // yours, keep it". Wrong means a caller believed it was saying something,
+    // so it falls back to late: early claims we beat page script, and claiming
+    // that falsely skips the capture net and quietly stops working on the hard
+    // cases.
+    if (mode !== undefined && mode !== null) out.mode = mode === 'early' ? 'early' : 'late';
+    return out;
   }
 
   /**
