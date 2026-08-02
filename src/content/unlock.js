@@ -29,6 +29,16 @@
   if (window[KEY]) {
     // Already installed. A second injection means the popup was used again, so
     // re-apply the DOM level work and leave the prototype patches alone.
+    //
+    // The boot payload the injector just wrote is dead on this path: it was
+    // already delivered through configure(). Clearing it keeps the extension
+    // from leaving its settings sitting on the page as a readable global for
+    // the rest of the document's life.
+    try {
+      delete window.__unlockCopyBoot;
+    } catch {
+      /* not deletable here; harmless, it is only ever read once */
+    }
     try {
       window[KEY].refresh();
     } catch {
@@ -133,6 +143,38 @@
   const undo = [];
   /** Shadow roots we have reached, including closed ones caught at creation. */
   const shadowRoots = new Set();
+  /** Roots seen since the last pass, so a scoped pass need not revisit the rest. */
+  const freshRoots = [];
+  /**
+   * Inline handlers removed from the page, so relocking puts them back.
+   *
+   * The undo stack restores the patches; it cannot restore a DOM edit it has no
+   * record of, and without this list "lock" left a page that blocked copying
+   * purely through `oncopy="return false"` permanently unblocked. Capped
+   * because these are strong element references: real pages carry a handful,
+   * but a page that rebuilds hostile markup in a loop would otherwise turn the
+   * fix into a leak, and an incomplete relock is the better failure.
+   */
+  const stripped = [];
+  const STRIPPED_CAP = 2000;
+
+  function noteStripped(el, attr, value) {
+    if (typeof value !== 'string' || stripped.length >= STRIPPED_CAP) return;
+    stripped.push({ el, attr, value });
+  }
+
+  function restoreStripped() {
+    // Runs after the undo stack has unwound, so setAttribute is the browser's
+    // again and will not refuse these as hostile writes.
+    while (stripped.length) {
+      const { el, attr, value } = stripped.pop();
+      try {
+        if (!el.hasAttribute(attr)) el.setAttribute(attr, value);
+      } catch {
+        /* the element is gone, which is as restored as it needs to be */
+      }
+    }
+  }
 
   const rawAdd = EventTarget.prototype.addEventListener;
   const rawRemove = EventTarget.prototype.removeEventListener;
@@ -143,6 +185,8 @@
   let observer = null;
   let netInstalled = false;
   let installed = false;
+  /** How many neutered copy or cut dispatches are currently on the stack. */
+  let cleanCopyDepth = 0;
 
   /* ---------------------------------------------------------------- */
   /* Helpers                                                           */
@@ -206,6 +250,12 @@
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.altKey) return false;
     const k = String(e.key || '').toLowerCase();
+    // Paste rides with the pointer group: both are unblocked only under
+    // aggressive, for the same reason. Leaving it out here left that mode half
+    // wired, because a site that blocks pasting into a confirmation field
+    // usually does it from keydown rather than from the paste event, and those
+    // keystrokes were being waved through while the paste event was neutered.
+    if (k === 'v') return !!policy.aggressive;
     if (e.shiftKey) return k === 'i' || k === 'j' || k === 'c';
     return k === 'c' || k === 'x' || k === 'a' || k === 's' || k === 'u' || k === 'p';
   }
@@ -276,6 +326,7 @@
     // A page that does not cancel the copy can still overwrite what lands on
     // the clipboard. Both holes have to be closed, and closing only one of
     // them looks like it works while the attribution text still gets through.
+    let cleaning = false;
     if (policy.cleanCopy && (e.type === 'copy' || e.type === 'cut')) {
       let real = null;
       try {
@@ -284,12 +335,18 @@
         real = null;
       }
       put('clipboardData', makeInertClipboard(real));
+      cleanCopyDepth++;
+      cleaning = true;
     }
 
     return () => {
       const remaining = (neuterDepth.get(e) || 1) - 1;
       neuterDepth.set(e, remaining);
       if (remaining > 0) return;
+      if (cleaning) {
+        cleaning = false;
+        cleanCopyDepth--;
+      }
       for (const name of shadowed) {
         try {
           delete e[name];
@@ -403,6 +460,101 @@
       Object.defineProperty(proto, 'addEventListener', addDesc);
       if (removeDesc) Object.defineProperty(proto, 'removeEventListener', removeDesc);
     });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Patch: Event.prototype                                            */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Close the gap underneath the per-event shadows.
+   *
+   * neuter() replaces preventDefault and friends with own properties on the
+   * event, which beats every ordinary `e.preventDefault()`. It does not beat
+   * `Event.prototype.preventDefault.call(e)`, which never consults the instance
+   * at all, and one line of that in a page's copy handler is enough to make the
+   * extension look installed while the copy stays blocked. Guarding the
+   * prototype method has no such underside.
+   *
+   * The guard is the same reference count the shadows use, so this refuses only
+   * while a wrapped hostile listener is on the stack. Every other event on the
+   * page behaves exactly as before and pays one WeakMap lookup.
+   */
+  function patchEventProto() {
+    if (typeof Event !== 'function') return;
+
+    for (const name of ['preventDefault', 'stopPropagation', 'stopImmediatePropagation']) {
+      const desc = Object.getOwnPropertyDescriptor(Event.prototype, name);
+      if (!desc || !desc.configurable || typeof desc.value !== 'function') continue;
+      const original = desc.value;
+      Event.prototype[name] = function () {
+        if (neuterDepth.get(this) > 0) return undefined;
+        return original.apply(this, arguments);
+      };
+      undo.push(() => Object.defineProperty(Event.prototype, name, desc));
+    }
+
+    // returnValue = false is preventDefault under another name, and reaching it
+    // through the prototype setter is the same bypass again.
+    const desc = Object.getOwnPropertyDescriptor(Event.prototype, 'returnValue');
+    if (!desc || !desc.configurable || !desc.get || !desc.set) return;
+    const read = desc.get;
+    const write = desc.set;
+    try {
+      Object.defineProperty(Event.prototype, 'returnValue', {
+        configurable: true,
+        enumerable: desc.enumerable,
+        get() {
+          if (neuterDepth.get(this) > 0) return true;
+          return read.call(this);
+        },
+        set(value) {
+          if (neuterDepth.get(this) > 0) return;
+          write.call(this, value);
+        },
+      });
+      undo.push(() => Object.defineProperty(Event.prototype, 'returnValue', desc));
+    } catch {
+      /* the three methods above are the load-bearing half */
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Patch: async clipboard                                            */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Refuse a clipboard write issued from inside a copy we are cleaning.
+   *
+   * Making event.clipboardData inert stops setData, which is how attribution
+   * text was appended for years. It does nothing about a handler that lets the
+   * real copy through untouched and then calls navigator.clipboard.writeText
+   * with its own string, which lands a moment later and wins.
+   *
+   * The window is deliberately just the dispatch. A page's own "Copy" button
+   * calls writeText too, and breaking those would be a worse bug than the one
+   * this closes, so the test is whether a neutered copy is on the stack rather
+   * than anything about the text. A handler that defers its write past the
+   * dispatch still gets through; catching that would need a timer, and a timer
+   * would catch the copy buttons.
+   */
+  function patchAsyncClipboard() {
+    if (typeof Clipboard !== 'function') return;
+    for (const name of ['writeText', 'write']) {
+      const desc = Object.getOwnPropertyDescriptor(Clipboard.prototype, name);
+      if (!desc || !desc.configurable || typeof desc.value !== 'function') continue;
+      const original = desc.value;
+      Clipboard.prototype[name] = function () {
+        if (policy.enabled && policy.cleanCopy && cleanCopyDepth > 0) {
+          // Resolving rather than rejecting: a page that awaits this and shows
+          // the user a failure would be a worse outcome than one that believes
+          // it wrote.
+          return Promise.resolve();
+        }
+        return original.apply(this, arguments);
+      };
+      undo.push(() => Object.defineProperty(Clipboard.prototype, name, desc));
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -520,7 +672,7 @@
     Element.prototype.attachShadow = function (init) {
       const root = original.apply(this, arguments);
       try {
-        shadowRoots.add(root);
+        noteShadowRoot(root);
         styleShadowRoot(root);
       } catch {
         /* never let our bookkeeping break the page's component */
@@ -614,33 +766,52 @@
     return policy.aggressive ? HOSTILE_ATTRS.concat(AGGRESSIVE_ATTRS) : HOSTILE_ATTRS;
   }
 
+  function stripOne(el, attrs) {
+    // An editor with an inline copy handler is rare, but stripping it would
+    // break the editor for the same reason dropping its listener would. The
+    // walk is cheap here because the selector already narrowed this to the
+    // handful of nodes that carry one of these attributes at all.
+    if (isEditor(el)) return;
+    for (const attr of attrs) {
+      if (!el.hasAttribute(attr)) continue;
+      // Recorded before the removal rather than after: the reflection assignment
+      // below can throw on some elements, and a record made after it would miss
+      // an attribute that really was removed. Restoring checks the attribute is
+      // still absent, so a record for a removal that did not happen is inert.
+      noteStripped(el, attr, el.getAttribute(attr));
+      try {
+        el.removeAttribute(attr);
+        el[attr] = null;
+      } catch {
+        /* readonly reflection on some elements; the attribute is gone regardless */
+      }
+    }
+  }
+
   function stripAttrs(root) {
-    if (!policy.enabled || !root || !root.querySelectorAll) return;
+    if (!policy.enabled || !root) return;
     const attrs = attrList();
     const selector = attrs.map((a) => `[${a}]`).join(',');
+
+    // querySelectorAll never returns the node it was called on, and a node the
+    // observer hands us is exactly the one most likely to be carrying the
+    // attribute, so the root is matched separately.
+    if (root.nodeType === 1 && root.matches) {
+      try {
+        if (root.matches(selector)) stripOne(root, attrs);
+      } catch {
+        /* a custom element with a hostile matches(); descendants still run */
+      }
+    }
+
+    if (!root.querySelectorAll) return;
     let nodes;
     try {
       nodes = root.querySelectorAll(selector);
     } catch {
       return;
     }
-    for (const el of nodes) {
-      // An editor with an inline copy handler is rare, but stripping it would
-      // break the editor for the same reason dropping its listener would. The
-      // walk is cheap here because the selector already narrowed this to the
-      // handful of nodes that carry one of these attributes at all.
-      if (isEditor(el)) continue;
-      for (const attr of attrs) {
-        if (el.hasAttribute(attr)) {
-          try {
-            el.removeAttribute(attr);
-            el[attr] = null;
-          } catch {
-            /* readonly reflection on some elements; the attribute is gone regardless */
-          }
-        }
-      }
-    }
+    for (const el of nodes) stripOne(el, attrs);
   }
 
   /**
@@ -666,7 +837,45 @@
     }
   }
 
+  /**
+   * Register a root, and say whether it was new.
+   *
+   * Callers use the answer to skip re-walking a subtree that was already
+   * covered, which is what keeps repeat passes proportional to what changed.
+   */
+  function noteShadowRoot(root) {
+    if (!root || shadowRoots.has(root)) return false;
+    shadowRoots.add(root);
+    freshRoots.push(root);
+    return true;
+  }
+
+  /**
+   * Forget roots whose host has left the document.
+   *
+   * Without this the Set is a leak with a second symptom: a single page
+   * application that mounts and unmounts components adds a root per mount and
+   * never drops one, so both memory and the cost of every later pass climb for
+   * as long as the tab is open.
+   */
+  function pruneShadowRoots() {
+    for (const root of shadowRoots) {
+      let alive = false;
+      try {
+        alive = !!(root.host && root.host.isConnected);
+      } catch {
+        alive = false;
+      }
+      if (!alive) shadowRoots.delete(root);
+    }
+  }
+
   function collectOpenShadowRoots(root) {
+    if (!root) return;
+    if (root.nodeType === 1 && root.shadowRoot && noteShadowRoot(root.shadowRoot)) {
+      collectOpenShadowRoots(root.shadowRoot);
+    }
+    if (!root.querySelectorAll) return;
     let nodes;
     try {
       nodes = root.querySelectorAll('*');
@@ -674,17 +883,44 @@
       return;
     }
     for (const el of nodes) {
-      if (el.shadowRoot) {
-        shadowRoots.add(el.shadowRoot);
+      if (el.shadowRoot && noteShadowRoot(el.shadowRoot)) {
         collectOpenShadowRoots(el.shadowRoot);
       }
     }
   }
 
+  /** Full pass. Worth its cost at install and on re-injection, not per frame. */
   function sweep() {
     stripAttrs(document);
     collectOpenShadowRoots(document);
+    pruneShadowRoots();
+    freshRoots.length = 0;
     for (const root of shadowRoots) {
+      styleShadowRoot(root);
+      stripAttrs(root);
+    }
+  }
+
+  /**
+   * Scoped pass over what the observer actually reported.
+   *
+   * The full pass walks every element in the document and every shadow root
+   * under it. Running that from the observer meant walking the whole page on
+   * any frame in which anything changed, which on a large single page
+   * application is most frames, and it made this extension a measurable source
+   * of jank on exactly the sites people install it for. Mutation records
+   * already name the nodes that changed, so only those need looking at.
+   */
+  function sweepNodes(nodes) {
+    for (const node of nodes) {
+      stripAttrs(node);
+      collectOpenShadowRoots(node);
+    }
+    pruneShadowRoots();
+    if (!freshRoots.length) return;
+    const roots = freshRoots.splice(0, freshRoots.length);
+    for (const root of roots) {
+      if (!shadowRoots.has(root)) continue;
       styleShadowRoot(root);
       stripAttrs(root);
     }
@@ -693,13 +929,46 @@
   function startObserver() {
     if (observer || typeof MutationObserver !== 'function') return;
     let queued = false;
-    observer = new MutationObserver(() => {
-      if (queued) return;
+    /**
+     * Nodes reported since the last pass, and a flag for giving up on tracking
+     * them individually.
+     *
+     * The cap is not tidiness. A background tab does not run
+     * requestAnimationFrame at all, so an uncapped list would hold a strong
+     * reference to every node a busy page created for as long as the user left
+     * the tab alone. Past the cap the list is dropped and the next pass is a
+     * full one, which costs more for one frame and holds nothing.
+     */
+    const CAP = 2000;
+    let pending = [];
+    let full = false;
+
+    observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (full) break;
+        if (record.type === 'attributes') {
+          pending.push(record.target);
+        } else {
+          for (const node of record.addedNodes) {
+            if (node.nodeType === 1) pending.push(node);
+          }
+        }
+        if (pending.length > CAP) {
+          full = true;
+          pending = [];
+        }
+      }
+      if (queued || (!pending.length && !full)) return;
       queued = true;
       requestAnimationFrame(() => {
         queued = false;
+        const nodes = pending;
+        const wasFull = full;
+        pending = [];
+        full = false;
         try {
-          sweep();
+          if (wasFull) sweep();
+          else sweepNodes(nodes);
         } catch {
           /* a single bad pass must not tear down the observer */
         }
@@ -775,6 +1044,11 @@
 
   function install() {
     patchEventTarget();
+    // Before the handler props: both rely on the wrapping path, and this is
+    // what stops a wrapped listener reaching around the shadows to the real
+    // preventDefault underneath.
+    patchEventProto();
+    patchAsyncClipboard();
     patchHandlerProps();
     patchSelection();
     // Harmless in late mode and useful in both: single page apps keep building
@@ -831,6 +1105,7 @@
         /* keep unwinding: a stuck step must not strand the rest patched */
       }
     }
+    restoreStripped();
     for (const root of shadowRoots) {
       try {
         const style = root.querySelector('style[data-unlock-copy]');

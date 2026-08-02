@@ -69,7 +69,13 @@ UC.origins = (function () {
       return { ok: false, reason: 'unsupported' };
     }
     // The built-in PDF viewer is a native plugin, not a document we can touch.
-    if (/\.pdf($|\?|#)/i.test(parsed.pathname + parsed.search)) {
+    //
+    // Only the path decides. Testing the query string too looks harmless and is
+    // not: `?file=report.pdf` is the standard way an ordinary HTML viewer page
+    // names the document it is displaying, so including the search refused
+    // exactly the pages that can be unlocked, and it caught plain search results
+    // like `?q=cheatsheet.pdf` as well.
+    if (/\.pdf$/i.test(parsed.pathname)) {
       return { ok: false, reason: 'pdf' };
     }
 
@@ -87,6 +93,11 @@ UC.origins = (function () {
    * http://example.com/*.
    */
   function patternFor(origin) {
+    // A scheme-only origin has no host to trim back to. `file://` is the one
+    // that reaches here, and stripping its slashes yields `file:/*`, which is
+    // not a valid match pattern: every permissions call built from it throws
+    // and the caller reads the throw as "not granted".
+    if (/^[a-z][a-z0-9+.-]*:\/\/$/i.test(origin)) return origin + '/*';
     return origin.replace(/\/+$/, '') + '/*';
   }
 

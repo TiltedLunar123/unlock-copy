@@ -44,8 +44,19 @@ test('both web stores are refused', () => {
 test('pdf urls are refused, because the viewer is not a document we can touch', () => {
   assert.equal(classify('https://example.com/paper.pdf').reason, 'pdf');
   assert.equal(classify('https://example.com/paper.pdf?download=1').reason, 'pdf');
+  assert.equal(classify('https://example.com/paper.PDF').reason, 'pdf');
   // A path that merely contains "pdf" is a normal page and must stay unlockable.
   assert.equal(classify('https://example.com/pdf-tips').ok, true);
+});
+
+test('a pdf named in the query string is still an ordinary html page', () => {
+  // `?file=x.pdf` is how a viewer page names the document it is displaying, so
+  // matching the query string refused exactly the pages that can be unlocked,
+  // and swept up plain search results on the way.
+  assert.equal(classify('https://example.com/viewer.html?file=paper.pdf').ok, true);
+  assert.equal(classify('https://example.com/download?doc=report.pdf').ok, true);
+  assert.equal(classify('https://example.com/search?q=cheatsheet.pdf').ok, true);
+  assert.equal(classify('https://example.com/read#chapter.pdf').ok, true);
 });
 
 test('file and unsupported schemes are refused separately', () => {
@@ -79,6 +90,14 @@ test('patterns stay origin scoped, so granting https never implies http', () => 
   assert.equal(patternFor('https://example.com'), 'https://example.com/*');
   assert.equal(patternFor('https://example.com/'), 'https://example.com/*');
   assert.notEqual(patternFor('https://example.com'), patternFor('http://example.com'));
+});
+
+test('a scheme-only origin still produces a valid match pattern', () => {
+  // Trimming the trailing slashes off `file://` yields `file:/*`, which the
+  // browser rejects; every permissions call built from it throws and the caller
+  // reads the throw as "not granted".
+  assert.equal(patternFor('file://'), 'file:///*');
+  assert.equal(patternFor('file://'), classify('file:///c:/x.html', { fileAccess: true }).pattern);
 });
 
 test('script ids are stable, distinct per origin and safe as identifiers', () => {

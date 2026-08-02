@@ -58,7 +58,19 @@ test('an unrecognised mode falls back to late, never to early', () => {
   // Early means "we got here before page script". Guessing that wrongly would
   // skip the capture net and quietly stop working on the hard cases.
   assert.equal(forPage(DEFAULTS, 'nonsense').mode, 'late');
-  assert.equal(forPage(DEFAULTS, undefined).mode, 'late');
+  assert.equal(forPage(DEFAULTS, 'EARLY').mode, 'late');
+});
+
+test('an omitted mode is left out entirely, so a push cannot overwrite one', () => {
+  // Only the code doing the injecting knows how a page was reached. A later
+  // push updating a switch does not, and the stored "always unlock" flag is not
+  // that answer either: it says what the next load will do, not how the page in
+  // front of the user was patched. Sending a guess is how a page unlocked late
+  // gets told it is early and drops the capture net it depends on.
+  const page = forPage(DEFAULTS);
+  assert.equal('mode' in page, false);
+  assert.equal(forPage(DEFAULTS, null).mode, undefined);
+  assert.equal(page.enabled, true, 'the rest of the payload is unaffected');
 });
 
 test('the stylesheet forces selection back on with !important', () => {
