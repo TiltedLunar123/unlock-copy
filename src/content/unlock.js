@@ -902,9 +902,18 @@
     '::selection{background-color:Highlight !important;color:HighlightText !important}';
 
   function styleShadowRoot(root) {
-    if (!policy.enabled || !policy.selection || !root) return;
+    if (!root) return;
     try {
-      if (root.querySelector('style[data-unlock-copy]')) return;
+      const existing = root.querySelector('style[data-unlock-copy]');
+      // Turning selection back off has to take these out again. The light DOM
+      // sheet is the background's to remove and it does; leaving the shadow
+      // copies behind left the switch half applied, so the page relocked
+      // everywhere except inside its own components.
+      if (!policy.enabled || !policy.selection) {
+        if (existing) existing.remove();
+        return;
+      }
+      if (existing) return;
       const style = document.createElement('style');
       style.setAttribute('data-unlock-copy', '');
       style.textContent = SHADOW_CSS;
