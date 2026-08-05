@@ -86,7 +86,22 @@
     'onselect',
     'ondragstart',
   ];
-  const AGGRESSIVE_ATTRS = ['onmousedown', 'onmouseup', 'onkeydown', 'onkeypress'];
+  /**
+   * Stripped only under aggressive mode.
+   *
+   * onpaste and onbeforepaste belong here because aggressive mode is what
+   * unblocks pasting, and it was unblocking the paste event and the keydown
+   * route into it while leaving `onpaste="return false"` on the field itself
+   * untouched, which is the one spelling a confirmation box usually uses.
+   */
+  const AGGRESSIVE_ATTRS = [
+    'onmousedown',
+    'onmouseup',
+    'onkeydown',
+    'onkeypress',
+    'onpaste',
+    'onbeforepaste',
+  ];
 
   /**
    * Editor roots that own their copy handling for good reasons. Calling through

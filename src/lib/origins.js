@@ -38,6 +38,26 @@ UC.origins = (function () {
    * @returns {{ok: boolean, reason?: string, origin?: string, host?: string,
    *   pattern?: string, local?: boolean}}
    */
+  /**
+   * A readable name for a local file, whatever it is called.
+   *
+   * A file name may contain a bare percent sign, the URL parser leaves it in
+   * the path, and decodeURIComponent throws URIError on it. That throw escaped
+   * classify and took its caller with it: the popup showed the user a raw "URI
+   * malformed", and a policy broadcast gave up partway through its tab list, so
+   * one oddly named local file left every other open tab on the old settings.
+   */
+  function fileLabel(pathname) {
+    const raw = String(pathname || '')
+      .split('/')
+      .pop();
+    try {
+      return decodeURIComponent(raw) || 'Local file';
+    } catch {
+      return raw || 'Local file';
+    }
+  }
+
   function classify(url, options) {
     if (!url) return { ok: false, reason: 'no-tab' };
 
@@ -61,7 +81,7 @@ UC.origins = (function () {
         ok: true,
         local: true,
         origin: 'file://',
-        host: decodeURIComponent(parsed.pathname.split('/').pop()) || 'Local file',
+        host: fileLabel(parsed.pathname),
         pattern: 'file:///*',
       };
     }

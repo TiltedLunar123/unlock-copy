@@ -94,6 +94,25 @@ const CASES = [
     settle: 120,
   },
   {
+    id: '19',
+    label: 'shadow dom locked by css alone',
+    expect: 'UNLOCKCOPY-19-SHADOWCSS',
+    // Case 10 carries a copy listener as well as a user-select lock, and that
+    // listener decides case 10 on its own, so nothing asserted that shadow
+    // content locked purely by CSS becomes selectable. This root has no
+    // listener at all. Dragged rather than selected through the API, because
+    // the Selection API ignores user-select.
+    //
+    // Measured while adding it, Edge and Chromium 2026-08-05: this still passes
+    // with the per shadow root stylesheet the engine injects emptied out, so
+    // what actually unlocks it is the USER origin sheet the background inserts
+    // for the document, which does reach into open shadow roots. The engine's
+    // own copies are belt and braces on Chromium. Not probed on Firefox, which
+    // is why they stay.
+    drag: true,
+    rectExpr: "document.getElementById('host19').shadowRoot.getElementById('t19')",
+  },
+  {
     id: 'E',
     label: 'editor keeps its own copy handler',
     sel: '#tE',
@@ -155,11 +174,14 @@ async function buildTestVariant() {
 /* Driving one case                                                    */
 /* ------------------------------------------------------------------ */
 
-async function dragSelect(cdp, page, selector) {
+async function dragSelect(cdp, page, testCase) {
+  // A case inside a shadow root cannot be reached with a plain selector, so it
+  // supplies its own expression for finding the element.
+  const finder = testCase.rectExpr || `document.querySelector(${JSON.stringify(testCase.sel)})`;
   const rect = await cdp.evaluate(
     page,
     `(() => {
-       const el = document.querySelector(${JSON.stringify(selector)});
+       const el = ${finder};
        el.scrollIntoView({ block: 'center' });
        const r = el.getBoundingClientRect();
        return { x: r.left, y: r.top + r.height / 2, w: r.width };
@@ -200,7 +222,7 @@ async function runCase(cdp, page, testCase) {
   await cdp.evaluate(page, `navigator.clipboard.writeText(${JSON.stringify(SENTINEL)})`);
 
   if (testCase.drag) {
-    await dragSelect(cdp, page, testCase.sel);
+    await dragSelect(cdp, page, testCase);
   } else if (testCase.selectExpr) {
     await cdp.evaluate(page, testCase.selectExpr);
   } else {
