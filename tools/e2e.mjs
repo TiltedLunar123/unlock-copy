@@ -85,12 +85,27 @@ const CASES = [
   },
   { id: '15', label: 'cancels through Event.prototype', sel: '#t15', expect: 'UNLOCKCOPY-15-PROTOCANCEL' },
   { id: '16', label: 'async clipboard hijack', sel: '#t16', expect: 'UNLOCKCOPY-16-ASYNCHIJACK' },
+  { id: '17', label: 'document.onkeydown property', sel: '#t17', expect: 'UNLOCKCOPY-17-ONKEYDOWN' },
+  {
+    id: '18',
+    label: 'watchdog that collapses the selection',
+    sel: '#t18',
+    expect: 'UNLOCKCOPY-18-COLLAPSE',
+    settle: 120,
+  },
   {
     id: 'E',
     label: 'editor keeps its own copy handler',
     sel: '#tE',
     expect: 'UNLOCKCOPY-E-TRANSFORMED',
     blocks: false,
+  },
+  {
+    id: 'F',
+    label: 'editor still blocks its own copy',
+    sel: '#tF',
+    expect: 'UNLOCKCOPY-F-EDITORBLOCK',
+    keepsBlocking: true,
   },
 ];
 
@@ -223,6 +238,19 @@ function judge(phase, testCase, got) {
   // which is how "we never broke Google Docs" gets asserted rather than hoped.
   if (testCase.blocks === false) {
     return { pass: matched, detail: matched ? '' : `expected ${want}, got ${JSON.stringify(got)}` };
+  }
+
+  // The mirror of blocks:false. A page is allowed to cancel a copy inside its
+  // own editor, and this extension is not supposed to have an opinion about
+  // that, so the case must keep blocking in every phase including the two where
+  // the engine is installed. Baseline proves the fixture blocks at all.
+  if (testCase.keepsBlocking) {
+    return {
+      pass: !matched,
+      detail: matched
+        ? 'the engine overrode a copy an editor cancelled for itself'
+        : '',
+    };
   }
 
   if (phase === 'baseline') {

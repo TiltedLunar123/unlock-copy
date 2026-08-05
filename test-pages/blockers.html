@@ -169,8 +169,23 @@
     </section>
 
     <section>
+      <h2>17 document.onkeydown property eats ctrl+c</h2>
+      <p id="t17">UNLOCKCOPY-17-ONKEYDOWN</p>
+    </section>
+
+    <section>
+      <h2>18 selection watchdog that collapses instead of removing ranges</h2>
+      <p id="t18">UNLOCKCOPY-18-COLLAPSE</p>
+    </section>
+
+    <section>
       <h2>E editor with a legitimate copy handler, must keep working</h2>
       <p id="tE" contenteditable="true">UNLOCKCOPY-E-EDITOR</p>
+    </section>
+
+    <section>
+      <h2>F editor that blocks its own copy by returning false, must keep blocking</h2>
+      <p id="tF" contenteditable="true">UNLOCKCOPY-F-EDITORBLOCK</p>
     </section>
 
     <script>
@@ -273,11 +288,50 @@
         navigator.clipboard.writeText(text + ' -- copied from example.com').catch(() => {});
       });
 
+      /* ---- 17: the handler property form of case 7 ----
+         `document.onkeydown = fn` never goes through addEventListener, so the
+         wrapping path cannot see it. Both the preventDefault and the `return
+         false` below have to stop working for this case to copy. */
+      document.onkeydown = function (e) {
+        if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'c') {
+          if (isCase(e, 't17')) {
+            e.preventDefault();
+            return false;
+          }
+        }
+        return undefined;
+      };
+
+      /* ---- 18: the watchdog from case 8, spelled a different way ----
+         Collapsing the selection empties it just as effectively as removing
+         every range, and a patch that only knows removeAllRanges walks past it. */
+      setInterval(() => {
+        const selection = document.getSelection();
+        if (!selection || selection.rangeCount === 0) return;
+        const node = selection.getRangeAt(0).commonAncestorContainer;
+        const el = node.nodeType === 1 ? node : node.parentElement;
+        const target = document.getElementById('t18');
+        if (el && target && (el === target || target.contains(el) || el.contains(target))) {
+          selection.collapseToStart();
+        }
+      }, 40);
+
       /* ---- E: a real editor that owns its copy on purpose ---- */
       document.getElementById('tE').addEventListener('copy', (e) => {
         e.clipboardData.setData('text/plain', 'UNLOCKCOPY-E-TRANSFORMED');
         e.preventDefault();
       });
+
+      /* ---- F: an editor that cancels its own copy the legacy way ----
+         An on* handler cancels through its return value. Routing the handler
+         through addEventListener to defeat a hostile `return false` also
+         defeats every legitimate one, so the engine has to put the contract
+         back for events it is leaving alone. This case is inside an editor,
+         which the engine never neuters, so it must go on blocking in every
+         phase. */
+      document.getElementById('tF').oncopy = function () {
+        return false;
+      };
     </script>
   </body>
 </html>
