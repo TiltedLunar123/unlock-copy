@@ -15,6 +15,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { deflateRaw } from 'node:zlib';
 import { promisify } from 'node:util';
 
@@ -256,14 +257,26 @@ async function check(base) {
   for (const call of netCalls) problems.push(`network call in shipped source -> ${call}`);
 
   // Every shipped script must parse. A syntax error in a content script is
-  // invisible until a user hits the site it was supposed to fix.
+  // invisible until a user hits the site it was supposed to fix, and the popup
+  // and options pages have no end to end coverage at all, so nothing else in
+  // this repo would catch one there.
+  //
+  // This step only scanned for control characters, which is not a parse and
+  // could not fail on a broken file. vm.Script compiles without running, so it
+  // answers the question the gate says it is asking.
   for (const target of TARGETS) {
     await walk(path.join(DIST, target), async (file) => {
       if (!file.endsWith('.js')) return;
       const source = await fs.readFile(file, 'utf8');
+      const rel = path.relative(ROOT, file);
       // eslint-disable-next-line no-control-regex
       if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(source)) {
-        problems.push(`[${target}] control characters in ${path.relative(ROOT, file)}`);
+        problems.push(`[${target}] control characters in ${rel}`);
+      }
+      try {
+        new vm.Script(source, { filename: rel });
+      } catch (error) {
+        problems.push(`[${target}] ${rel} does not parse: ${error.message}`);
       }
     });
   }
@@ -449,6 +462,11 @@ async function main() {
     console.log(`built ${target} -> ${path.relative(ROOT, out)}`);
   }
 
+  // The gate runs before the zips are written. A gate that reports a problem
+  // and then leaves a finished-looking artifact beside it is one upload away
+  // from shipping the build it just refused.
+  if (args.has('--check')) await check(base);
+
   if (args.has('--zip')) {
     await fs.mkdir(path.join(ROOT, 'release'), { recursive: true });
     for (const target of TARGETS) {
@@ -457,8 +475,6 @@ async function main() {
       console.log(`zipped ${target} (${n} files) -> ${path.relative(ROOT, zip)}`);
     }
   }
-
-  if (args.has('--check')) await check(base);
 }
 
 main().catch((err) => {

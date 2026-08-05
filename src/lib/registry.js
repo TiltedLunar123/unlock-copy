@@ -145,6 +145,13 @@ UC.registry = (function () {
   /** Bring registrations in line with storage and permissions. */
   async function reconcileNow() {
     const wanted = await UC.settings.alwaysOrigins();
+    // A store that cannot be read is not a user who wants nothing. Reading it
+    // as one unregisters every site the user ever turned on, and since nothing
+    // re-runs this on its own, they stay off until someone opens the popup and
+    // toggles something. Leaving the registrations alone keeps the machine in
+    // the state the user last asked for, which is the honest fallback.
+    if (!wanted) return { register: [], unregister: [], stale: [], unreadable: true };
+
     const granted = await grantedOrigins(wanted);
     const ids = await currentIds();
     const decision = plan(wanted, granted, ids);

@@ -86,7 +86,22 @@
     'onselect',
     'ondragstart',
   ];
-  const AGGRESSIVE_ATTRS = ['onmousedown', 'onmouseup', 'onkeydown', 'onkeypress'];
+  /**
+   * Stripped only under aggressive mode.
+   *
+   * onpaste and onbeforepaste belong here because aggressive mode is what
+   * unblocks pasting, and it was unblocking the paste event and the keydown
+   * route into it while leaving `onpaste="return false"` on the field itself
+   * untouched, which is the one spelling a confirmation box usually uses.
+   */
+  const AGGRESSIVE_ATTRS = [
+    'onmousedown',
+    'onmouseup',
+    'onkeydown',
+    'onkeypress',
+    'onpaste',
+    'onbeforepaste',
+  ];
 
   /**
    * Editor roots that own their copy handling for good reasons. Calling through
@@ -185,6 +200,8 @@
   let observer = null;
   let netInstalled = false;
   let installed = false;
+  /** Set by disable(). Once torn down, this engine stays down. */
+  let torn = false;
   /** How many neutered copy or cut dispatches are currently on the stack. */
   let cleanCopyDepth = 0;
 
@@ -566,25 +583,69 @@
    * needs its own guard. Rather than swallowing the assignment we accept it and
    * register the handler through the wrapping path, which keeps the page's
    * intent intact minus the cancelling.
+   *
+   * The list of properties comes from the same vocabulary the wrapper uses.
+   * Keeping a second list by hand is what let this drift: it covered oncopy and
+   * oncontextmenu but never the keyboard group, so `document.onkeydown = ...`
+   * went on eating Ctrl+C on an always-unlocked site while the
+   * addEventListener spelling of the same block was handled. The pointer group
+   * stays out for the reason it stays out of HOSTILE_ATTRS: those handlers are
+   * load bearing on ordinary pages and only matter under aggressive mode.
    */
-  function patchHandlerProps() {
-    const targets = [
-      [Document.prototype, ['oncontextmenu', 'oncopy', 'oncut', 'onselectstart', 'ondragstart']],
-      [
-        HTMLElement.prototype,
-        ['oncontextmenu', 'oncopy', 'oncut', 'onselectstart', 'onselect', 'ondragstart'],
-      ],
-    ];
-    // Window handler properties live on the instance in some engines and on
-    // Window.prototype in others, so try both and take whichever exists.
-    const winProto = typeof Window === 'function' ? Window.prototype : null;
-    if (winProto) targets.push([winProto, ['oncontextmenu', 'oncopy', 'oncut']]);
+  const HANDLER_EVENTS = SELECTION_EVENTS.concat(MENU_EVENTS, KEY_EVENTS);
 
-    for (const [proto, names] of targets) {
-      for (const name of names) {
-        patchHandlerProp(proto, name, name.slice(2));
+  function patchHandlerProps() {
+    const protos = [Document.prototype, HTMLElement.prototype];
+    // Window handler properties live on Window.prototype in some engines and
+    // only on the instance in others. patchHandlerProp skips whatever is not
+    // there, so listing a property a prototype does not own costs nothing.
+    if (typeof Window === 'function') protos.push(Window.prototype);
+
+    for (const proto of protos) {
+      for (const type of HANDLER_EVENTS) {
+        patchHandlerProp(proto, 'on' + type, type);
       }
     }
+  }
+
+  /**
+   * Wrapper for a handler assigned to an on* property.
+   *
+   * Differs from the addEventListener wrapper in one way, and it is the whole
+   * reason this exists separately: an on* handler cancels by returning false,
+   * and the engine processes that return value internally rather than by
+   * calling anything neuter() can shadow. Registering the handler through
+   * addEventListener is what defeats it, which is exactly what a hostile
+   * `document.oncopy = () => false` deserves.
+   *
+   * It is not what a legitimate one deserves. The same route silently drops
+   * every `return false` on the page, including on events this extension is
+   * switched off for and inside editors it promises never to touch, so the
+   * contract is put back by hand whenever the event is one we are leaving
+   * alone.
+   */
+  const handlerWrappers = new WeakMap();
+
+  function wrapHandler(listener) {
+    const existing = handlerWrappers.get(listener);
+    if (existing) return existing;
+
+    const wrapper = function (event) {
+      if (!policy.enabled || !typeIsHostile(event.type) || isExempt(event)) {
+        const result = listener.call(this, event);
+        if (result === false) event.preventDefault();
+        return result;
+      }
+      const restore = neuter(event);
+      try {
+        return listener.call(this, event);
+      } finally {
+        restore();
+      }
+    };
+
+    handlerWrappers.set(listener, wrapper);
+    return wrapper;
   }
 
   function patchHandlerProp(proto, name, type) {
@@ -612,7 +673,7 @@
             store.delete(this);
           }
           if (typeof fn === 'function') {
-            const wrapped = wrapListener(fn);
+            const wrapped = wrapHandler(fn);
             store.set(this, { fn, wrapped });
             rawAdd.call(this, type, wrapped, false);
           }
@@ -628,19 +689,51 @@
   /* Patch: selection nuking                                           */
   /* ---------------------------------------------------------------- */
 
-  /** Defeats `setInterval(() => getSelection().removeAllRanges(), 50)`. */
+  /**
+   * The node a Selection call is about, when it names one.
+   *
+   * `collapse(node, offset)` and `removeRange(range)` say what they are acting
+   * on; the rest only act on whatever is selected right now. That difference
+   * matters because a page placing a caret in its own editor calls collapse
+   * while nothing is selected yet, so there is no anchor node to judge it by
+   * and judging by the anchor alone would refuse it.
+   */
+  function subjectOf(arg) {
+    if (!arg || typeof arg !== 'object') return null;
+    try {
+      if (arg.nodeType) return arg;
+      if (arg.startContainer) return arg.startContainer;
+    } catch {
+      /* an exotic argument tells us nothing; fall back to the anchor */
+    }
+    return null;
+  }
+
+  /**
+   * Defeats `setInterval(() => getSelection().removeAllRanges(), 50)`.
+   *
+   * removeAllRanges is the textbook watchdog and it is not the only spelling.
+   * Collapsing the selection empties it just as effectively, so a patch that
+   * only knew the textbook name let a page win by renaming one call.
+   */
   function patchSelection() {
     if (typeof Selection !== 'function') return;
-    for (const name of ['removeAllRanges', 'empty']) {
+    const names = [
+      'removeAllRanges',
+      'empty',
+      'removeRange',
+      'collapse',
+      'collapseToStart',
+      'collapseToEnd',
+    ];
+    for (const name of names) {
       const desc = Object.getOwnPropertyDescriptor(Selection.prototype, name);
       if (!desc || !desc.configurable || typeof desc.value !== 'function') continue;
       const original = desc.value;
       Selection.prototype[name] = function () {
         // Blocked only for a selection sitting in ordinary page content, which
         // is the case people complain about. An editor clearing its own
-        // selection after an operation is legitimate and has to keep working,
-        // and the anchor node is the only signal available about which of the
-        // two is happening.
+        // selection after an operation is legitimate and has to keep working.
         if (policy.enabled && policy.selection) {
           let anchor = null;
           try {
@@ -648,7 +741,8 @@
           } catch {
             anchor = null;
           }
-          if (!anchor || !isEditor(anchor)) return undefined;
+          const subject = subjectOf(arguments[0]) || anchor;
+          if (!subject || !isEditor(subject)) return undefined;
         }
         return original.apply(this, arguments);
       };
@@ -825,9 +919,18 @@
     '::selection{background-color:Highlight !important;color:HighlightText !important}';
 
   function styleShadowRoot(root) {
-    if (!policy.enabled || !policy.selection || !root) return;
+    if (!root) return;
     try {
-      if (root.querySelector('style[data-unlock-copy]')) return;
+      const existing = root.querySelector('style[data-unlock-copy]');
+      // Turning selection back off has to take these out again. The light DOM
+      // sheet is the background's to remove and it does; leaving the shadow
+      // copies behind left the switch half applied, so the page relocked
+      // everywhere except inside its own components.
+      if (!policy.enabled || !policy.selection) {
+        if (existing) existing.remove();
+        return;
+      }
+      if (existing) return;
       const style = document.createElement('style');
       style.setAttribute('data-unlock-copy', '');
       style.textContent = SHADOW_CSS;
@@ -1084,7 +1187,10 @@
   }
 
   function configure(next) {
-    if (!next || typeof next !== 'object') return;
+    // A torn down engine has no patches left to configure, and letting one be
+    // talked back into life is worse than ignoring the message: it would flip
+    // policy.enabled on a page whose handle is already gone.
+    if (torn || !next || typeof next !== 'object') return;
     for (const key of Object.keys(policy)) {
       if (key in next) policy[key] = next[key];
     }
@@ -1096,6 +1202,7 @@
   }
 
   function disable() {
+    torn = true;
     policy.enabled = false;
     while (undo.length) {
       const step = undo.pop();
@@ -1149,13 +1256,20 @@
   // Early mode talks to the isolated-world bridge instead. Announce first, then
   // listen, so a bridge that is already up answers immediately and one that is
   // not can still deliver later.
-  rawAdd.call(document, CHANNEL_POLICY, (e) => {
+  const onPolicy = (e) => {
     try {
       configure(e.detail);
     } catch {
       /* malformed payload; keep running on the previous policy */
     }
-  });
+  };
+  rawAdd.call(document, CHANNEL_POLICY, onPolicy);
+  // Registered through the undo stack like every other patch here. Left outside
+  // it, this listener outlived disable(): the next policy push found a torn
+  // down engine, switched it back on, reinstalled the capture net and swept a
+  // page the user had just relocked, with the handle already deleted so nothing
+  // could turn it off a second time.
+  undo.push(() => rawRemove.call(document, CHANNEL_POLICY, onPolicy));
 
   install();
 

@@ -103,11 +103,16 @@
     await api.scripting.executeScript({
       target: { tabId, allFrames: true },
       world: 'MAIN',
-      func: (policy) => {
-        window.__unlockCopyBoot = policy;
-        if (window.__unlockCopyEngine) window.__unlockCopyEngine.configure(policy);
+      func: (boot, live) => {
+        window.__unlockCopyBoot = boot;
+        // A frame that already has an engine keeps its own mode. The boot
+        // payload is for the frames that do not, and telling a frame unlocked
+        // at document_start that it started late trades the wrapping it was
+        // built on for the blunt capture net, which drops the page's own copy
+        // handlers instead of neutering them.
+        if (window.__unlockCopyEngine) window.__unlockCopyEngine.configure(live);
       },
-      args: [page],
+      args: [page, UC.policy.withoutMode(page)],
     });
 
     await api.scripting.executeScript({
@@ -300,7 +305,14 @@
     } catch {
       /* no bridge in this tab */
     }
-    if (page.selection) {
+    // Whether the stylesheet belongs on this tab is a question about the tab,
+    // not about the switch. Answering it from page.selection alone re-applied
+    // the unlock CSS to every tab this reaches on any settings change, which
+    // includes tabs the user had just relocked and tabs that were never
+    // unlocked at all but still hold a live activeTab grant. Changing a switch
+    // must not unlock anything.
+    const running = await isEngineActive(tabId);
+    if (running && page.selection) {
       try {
         await applyCss(tabId);
       } catch {
@@ -322,6 +334,10 @@
    * here, so a site with its own overrides still gets its own answer.
    */
   async function broadcastPolicy() {
+    // Same fresh read every other entry point does. classify() refuses a
+    // file:// tab when this says false, and on a cold worker the cache is
+    // still null, so a grant the user really holds read as absent.
+    await refreshFileAccess();
     let tabs = [];
     try {
       tabs = await api.tabs.query({});
@@ -345,6 +361,7 @@
 
   async function setFeature(tab, feature, value, scope) {
     if (UC.policy.FEATURES.indexOf(feature) === -1) return { ok: false, reason: 'unknown-feature' };
+    await refreshFileAccess();
 
     if (scope === 'global') {
       await UC.settings.writeDefaults({ [feature]: !!value });
@@ -391,11 +408,11 @@
   async function ensureCss(sender) {
     if (!sender || !sender.tab) return { ok: false, reason: 'no-tab' };
     try {
-      await api.scripting.insertCSS({
-        target: { tabId: sender.tab.id, allFrames: true },
-        origin: 'USER',
-        css: UC.policy.CSS,
-      });
+      // Through applyCss rather than a bare insert, so this shares the
+      // remove-then-insert that makes every other insertion path idempotent.
+      // A lone insert was the one route left that could stack a second copy of
+      // the stylesheet onto a tab, and a single remove only peels off one.
+      await applyCss(sender.tab.id);
       return { ok: true };
     } catch (error) {
       return { ok: false, reason: 'insert-failed', message: String(error && error.message) };

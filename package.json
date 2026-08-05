@@ -1,6 +1,6 @@
 {
   "name": "unlock-copy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Restore text selection, copy, right-click and keyboard shortcuts on sites that block them. Chrome and Firefox, MV3.",
   "private": true,
   "type": "module",

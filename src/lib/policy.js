@@ -87,5 +87,20 @@ UC.policy = (function () {
     '::selection{background-color:Highlight !important;color:HighlightText !important;}',
   ].join('');
 
-  return { DEFAULTS, FEATURES, resolve, diff, forPage, CSS };
+  /**
+   * The same payload, for an engine that is already running.
+   *
+   * An engine knows how its own page was reached better than any later caller
+   * does, so a push that is only meant to update switches must not carry a mode
+   * at all. Injecting into a tab does both jobs at once, and the mode that is
+   * right for a frame with no engine yet is wrong for the frame beside it that
+   * already has one.
+   */
+  function withoutMode(page) {
+    const out = Object.assign({}, page);
+    delete out.mode;
+    return out;
+  }
+
+  return { DEFAULTS, FEATURES, resolve, diff, forPage, withoutMode, CSS };
 })();

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { loadLib, plain, STUB_CHROME } from './helper.mjs';
 
 const ctx = await loadLib(['lib/browser.js', 'lib/policy.js'], { chrome: STUB_CHROME });
-const { DEFAULTS, FEATURES, resolve, diff, forPage, CSS } = ctx.UC.policy;
+const { DEFAULTS, FEATURES, resolve, diff, forPage, withoutMode, CSS } = ctx.UC.policy;
 
 test('a fresh install has everything on except aggressive mode', () => {
   const resolved = resolve(null, null);
@@ -77,4 +77,22 @@ test('the stylesheet forces selection back on with !important', () => {
   assert.match(CSS, /user-select:text !important/);
   assert.match(CSS, /-webkit-user-select:text !important/);
   assert.match(CSS, /::selection/);
+});
+
+test('a push to a running engine carries no mode at all', () => {
+  // Absent means "you already know yours, keep it". Only the injector knows how
+  // a page was reached, and stamping a guess onto a frame that is already
+  // unlocked at document_start swaps its wrapping for the capture net, which
+  // drops the page's own copy handlers instead of neutering them.
+  const page = forPage(DEFAULTS, 'late');
+  assert.equal(page.mode, 'late');
+
+  const live = withoutMode(page);
+  assert.equal('mode' in live, false);
+  // Everything else has to survive, or a switch push stops carrying switches.
+  for (const key of FEATURES) assert.equal(live[key], page[key]);
+  assert.equal(live.enabled, true);
+  // And the payload it was derived from is untouched, because the same object
+  // is handed to the frames that do need a mode.
+  assert.equal(page.mode, 'late');
 });

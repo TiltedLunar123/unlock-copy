@@ -85,12 +85,46 @@ const CASES = [
   },
   { id: '15', label: 'cancels through Event.prototype', sel: '#t15', expect: 'UNLOCKCOPY-15-PROTOCANCEL' },
   { id: '16', label: 'async clipboard hijack', sel: '#t16', expect: 'UNLOCKCOPY-16-ASYNCHIJACK' },
+  { id: '17', label: 'document.onkeydown property', sel: '#t17', expect: 'UNLOCKCOPY-17-ONKEYDOWN' },
+  {
+    id: '18',
+    label: 'watchdog that collapses the selection',
+    sel: '#t18',
+    expect: 'UNLOCKCOPY-18-COLLAPSE',
+    settle: 120,
+  },
+  {
+    id: '19',
+    label: 'shadow dom locked by css alone',
+    expect: 'UNLOCKCOPY-19-SHADOWCSS',
+    // Case 10 carries a copy listener as well as a user-select lock, and that
+    // listener decides case 10 on its own, so nothing asserted that shadow
+    // content locked purely by CSS becomes selectable. This root has no
+    // listener at all. Dragged rather than selected through the API, because
+    // the Selection API ignores user-select.
+    //
+    // Measured while adding it, Edge and Chromium 2026-08-05: this still passes
+    // with the per shadow root stylesheet the engine injects emptied out, so
+    // what actually unlocks it is the USER origin sheet the background inserts
+    // for the document, which does reach into open shadow roots. The engine's
+    // own copies are belt and braces on Chromium. Not probed on Firefox, which
+    // is why they stay.
+    drag: true,
+    rectExpr: "document.getElementById('host19').shadowRoot.getElementById('t19')",
+  },
   {
     id: 'E',
     label: 'editor keeps its own copy handler',
     sel: '#tE',
     expect: 'UNLOCKCOPY-E-TRANSFORMED',
     blocks: false,
+  },
+  {
+    id: 'F',
+    label: 'editor still blocks its own copy',
+    sel: '#tF',
+    expect: 'UNLOCKCOPY-F-EDITORBLOCK',
+    keepsBlocking: true,
   },
 ];
 
@@ -140,11 +174,14 @@ async function buildTestVariant() {
 /* Driving one case                                                    */
 /* ------------------------------------------------------------------ */
 
-async function dragSelect(cdp, page, selector) {
+async function dragSelect(cdp, page, testCase) {
+  // A case inside a shadow root cannot be reached with a plain selector, so it
+  // supplies its own expression for finding the element.
+  const finder = testCase.rectExpr || `document.querySelector(${JSON.stringify(testCase.sel)})`;
   const rect = await cdp.evaluate(
     page,
     `(() => {
-       const el = document.querySelector(${JSON.stringify(selector)});
+       const el = ${finder};
        el.scrollIntoView({ block: 'center' });
        const r = el.getBoundingClientRect();
        return { x: r.left, y: r.top + r.height / 2, w: r.width };
@@ -185,7 +222,7 @@ async function runCase(cdp, page, testCase) {
   await cdp.evaluate(page, `navigator.clipboard.writeText(${JSON.stringify(SENTINEL)})`);
 
   if (testCase.drag) {
-    await dragSelect(cdp, page, testCase.sel);
+    await dragSelect(cdp, page, testCase);
   } else if (testCase.selectExpr) {
     await cdp.evaluate(page, testCase.selectExpr);
   } else {
@@ -225,6 +262,19 @@ function judge(phase, testCase, got) {
     return { pass: matched, detail: matched ? '' : `expected ${want}, got ${JSON.stringify(got)}` };
   }
 
+  // The mirror of blocks:false. A page is allowed to cancel a copy inside its
+  // own editor, and this extension is not supposed to have an opinion about
+  // that, so the case must keep blocking in every phase including the two where
+  // the engine is installed. Baseline proves the fixture blocks at all.
+  if (testCase.keepsBlocking) {
+    return {
+      pass: !matched,
+      detail: matched
+        ? 'the engine overrode a copy an editor cancelled for itself'
+        : '',
+    };
+  }
+
   if (phase === 'baseline') {
     return {
       pass: !matched,
@@ -247,19 +297,52 @@ function judge(phase, testCase, got) {
 async function runPhase(cdp, page, phase, results) {
   for (const testCase of CASES) {
     let got;
+    let threw = false;
     try {
       got = await runCase(cdp, page, testCase);
     } catch (err) {
       got = `<error: ${err.message}>`;
+      threw = true;
     }
-    const { pass, detail } = judge(phase, testCase, got);
+    // A harness error is never a pass. Every negative assertion here scores by
+    // "the clipboard does not hold the expected text", and a case that blew up
+    // satisfies that trivially, so a broken harness reported the baseline phase
+    // green while no case had actually run. Baseline is the phase that exists
+    // to prove the fixture still blocks, so that failure mode hides everything.
+    const { pass, detail } = threw
+      ? { pass: false, detail: `harness error: ${got}` }
+      : judge(phase, testCase, got);
     results.push({ phase, id: testCase.id, label: testCase.label, pass, detail });
   }
 }
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * Refuse to run when something is already serving devtools on our port.
+ *
+ * A run that dies partway leaves its browser behind holding the port, and the
+ * next run then attaches to that one: an older build, a different profile, and
+ * a service worker whose id will never match, so the whole suite fails on a
+ * timeout that says nothing about the code. Saying so up front is worth more
+ * than the twenty minutes of reading a result that describes another build.
+ */
+async function assertPortFree() {
+  let existing;
+  try {
+    existing = await httpJson(PORT, '/json/version');
+  } catch {
+    return;
+  }
+  throw new Error(
+    `port ${PORT} is already serving devtools (${existing.Browser || 'unknown browser'}). ` +
+      'A previous run left its browser running. Kill it and try again, or this suite ' +
+      'attaches to that browser and tests whatever build it was launched with.'
+  );
+}
+
 async function main() {
+  await assertPortFree();
   const { dir, extensionId } = await buildTestVariant();
   const { server, port: filePort } = await serveDir(path.join(ROOT, 'test-pages'));
   const origin = `http://127.0.0.1:${filePort}`;

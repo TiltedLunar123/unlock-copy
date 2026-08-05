@@ -98,3 +98,42 @@ test('ids never collide across origins, including adversarial ones', () => {
     }
   }
 });
+
+test('two origins that differ only in punctuation get different ids', () => {
+  // `https://docs.google.com` and `https://docs-google.com` are both ordinary
+  // origins, and a sanitiser that collapses every run of punctuation to a dash
+  // maps them onto one id. The second one to be turned on then looks fully
+  // registered to plan(), never gets a content script, and the popup still
+  // reports it as always unlocked.
+  const dotted = 'https://docs.google.com';
+  const dashed = 'https://docs-google.com';
+  assert.notDeepEqual(idsOf(dotted), idsOf(dashed));
+
+  const decision = plan([dotted, dashed], [dotted, dashed], bothIds(dotted));
+  assert.deepEqual(plain(decision.register), [dashed], 'the second origin still needs registering');
+});
+
+test('an unreadable settings store unregisters nothing', async () => {
+  // reconcile() removes every registration the wanted list does not mention.
+  // Reading a storage failure as "the user wants none" therefore takes every
+  // always-unlock site on the machine offline, and nothing re-runs on its own
+  // to put them back.
+  const unregistered = [];
+  const chrome = {
+    storage: { sync: { get: async () => { throw new Error('Extension context invalidated'); } } },
+    permissions: { contains: async () => true },
+    scripting: {
+      getRegisteredContentScripts: async () => bothIds(A).map((id) => ({ id })),
+      registerContentScripts: async () => {},
+      unregisterContentScripts: async ({ ids }) => unregistered.push(...ids),
+    },
+  };
+  const isolated = await loadLib(
+    ['lib/browser.js', 'lib/policy.js', 'lib/origins.js', 'lib/settings.js', 'lib/registry.js'],
+    { chrome }
+  );
+
+  const decision = await isolated.UC.registry.reconcile();
+  assert.deepEqual(plain(unregistered), [], 'nothing may be unregistered on a failed read');
+  assert.deepEqual(plain(decision.unregister), []);
+});

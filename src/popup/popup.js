@@ -47,19 +47,23 @@
     el.live.hidden = false;
     el.host.textContent = state.host;
 
-    const on = state.always || state.sessionActive;
+    // Whether the page is unlocked is a question about the page, and only
+    // sessionActive answers it: it asks the engine. Treating a remembered site
+    // as proof made the button claim "Unlocked" over a page the keyboard
+    // shortcut had just relocked, and clicking it then removed the site from
+    // the always list rather than unlocking the page the user was looking at.
+    const on = state.sessionActive;
     el.primary.dataset.on = String(on);
     el.primary.setAttribute('aria-pressed', String(on));
 
-    if (state.always) {
+    if (on) {
       el.primaryLabel.textContent = 'Unlocked';
-      el.primaryNote.textContent = 'On every time you visit this site.';
-    } else if (state.sessionActive) {
-      el.primaryLabel.textContent = 'Unlocked';
-      el.primaryNote.textContent = 'Until you reload or leave this page.';
+      el.primaryNote.textContent = state.always
+        ? 'On every time you visit this site.'
+        : 'Until you reload or leave this page.';
     } else {
       el.primaryLabel.textContent = 'Unlock this page';
-      el.primaryNote.textContent = '';
+      el.primaryNote.textContent = state.always ? 'Relocked until you unlock it again.' : '';
     }
 
     // A local file has no origin to scope a permission to, so there is nothing
@@ -102,18 +106,19 @@
 
   el.primary.addEventListener('click', () =>
     guard(async () => {
+      // The button turns off what is actually on. A remembered site whose page
+      // has been relocked is off, so the job there is to unlock it again, not
+      // to forget the site.
+      if (!state.sessionActive) {
+        await send({ type: 'unlock-copy/unlock' });
+        return;
+      }
       if (state.always) {
         // The site is remembered, so the button's job is to undo that entirely
         // rather than leave a permission granted for a site now showing as off.
         await send({ type: 'unlock-copy/set-always', value: false });
-        await send({ type: 'unlock-copy/lock' });
-        return;
       }
-      if (state.sessionActive) {
-        await send({ type: 'unlock-copy/lock' });
-        return;
-      }
-      await send({ type: 'unlock-copy/unlock' });
+      await send({ type: 'unlock-copy/lock' });
     })
   );
 

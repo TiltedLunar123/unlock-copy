@@ -279,7 +279,13 @@ A transparent full-viewport div swallows the mouse so the text underneath cannot
 selected. Automatic detection is a heuristic and false positives break real UIs, so it
 is off by default and lives behind aggressive mode: on `mousedown`, if the top element at
 that point holds no text, is `position: fixed|absolute`, and covers most of the viewport,
-it gets `pointer-events: none` and the hit test is retried.
+it gets `pointer-events: none`.
+
+The shield is disabled, not re-hit-tested. The `mousedown` that triggered it is already
+spent, so the click that reveals a shield does nothing and the next one selects normally.
+An earlier draft of this section claimed the hit test was retried; it never was. Retrying
+would mean synthesising a second `mousedown`, which is a fair amount of machinery for one
+frame of delay in a mode that is off by default and has no automated coverage at all.
 
 ## 5. UI
 
@@ -376,8 +382,11 @@ editors clearing their own selection, and local files were refused even with the
 
 ## 9. Open items
 
-- ASSUMED: `contextmenu` with `stopImmediatePropagation()` and no `preventDefault()`
-  still shows the native menu on both engines. Asserted by E2E rather than trusted.
+- ASSUMED, and still only assumed: `contextmenu` with `stopImmediatePropagation()` and no
+  `preventDefault()` still shows the native menu on both engines. An earlier draft claimed
+  the E2E asserted this. It does not, and nothing else does either: every assertion in the
+  suite reads the clipboard, and a native context menu is not observable that way in
+  headless. The whole `contextmenu` feature therefore has no automated coverage.
 - ASSUMED: the `activeTab` grant survives same-document SPA navigation. The popup
   re-checks on open rather than caching.
 - Neither store has been submitted to. Store listing copy is not written.

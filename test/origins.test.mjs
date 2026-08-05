@@ -105,5 +105,26 @@ test('script ids are stable, distinct per origin and safe as identifiers', () =>
   assert.equal(a, scriptIdFor('https://example.com'));
   assert.notEqual(a, scriptIdFor('http://example.com'));
   assert.notEqual(scriptIdFor('https://a.example.com'), scriptIdFor('https://b.example.com'));
-  assert.match(a, /^uc-[a-z0-9-]+$/);
+  // Origins that differ only in punctuation must not share an id. A dot and a
+  // dash are both ordinary in a hostname, and merging them lost one whole site.
+  assert.notEqual(scriptIdFor('https://a.example.com'), scriptIdFor('https://a-example.com'));
+  // Underscore is safe in the middle. Chrome reserves it only as a first
+  // character, and every id here starts with the fixed "uc-" prefix.
+  assert.match(a, /^uc-[a-z0-9_]+$/);
+});
+
+test('a local file with a stray percent sign classifies instead of throwing', () => {
+  // decodeURIComponent throws URIError on a lone percent, and the URL parser
+  // leaves one in the path. The throw escaped classify and took its caller
+  // with it: the popup showed a raw "URI malformed" and a policy broadcast
+  // stopped partway down its tab list, so one badly named file left every
+  // other open tab on the old settings.
+  const info = classify('file:///c:/holiday%zz.html', { fileAccess: true });
+  assert.equal(info.ok, true);
+  assert.equal(info.local, true);
+  assert.equal(info.host, 'holiday%zz.html');
+
+  // The ordinary case still decodes.
+  const spaced = classify('file:///c:/my%20notes.txt', { fileAccess: true });
+  assert.equal(spaced.host, 'my notes.txt');
 });
