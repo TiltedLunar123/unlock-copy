@@ -185,6 +185,8 @@
   let observer = null;
   let netInstalled = false;
   let installed = false;
+  /** Set by disable(). Once torn down, this engine stays down. */
+  let torn = false;
   /** How many neutered copy or cut dispatches are currently on the stack. */
   let cleanCopyDepth = 0;
 
@@ -1170,7 +1172,10 @@
   }
 
   function configure(next) {
-    if (!next || typeof next !== 'object') return;
+    // A torn down engine has no patches left to configure, and letting one be
+    // talked back into life is worse than ignoring the message: it would flip
+    // policy.enabled on a page whose handle is already gone.
+    if (torn || !next || typeof next !== 'object') return;
     for (const key of Object.keys(policy)) {
       if (key in next) policy[key] = next[key];
     }
@@ -1182,6 +1187,7 @@
   }
 
   function disable() {
+    torn = true;
     policy.enabled = false;
     while (undo.length) {
       const step = undo.pop();
@@ -1235,13 +1241,20 @@
   // Early mode talks to the isolated-world bridge instead. Announce first, then
   // listen, so a bridge that is already up answers immediately and one that is
   // not can still deliver later.
-  rawAdd.call(document, CHANNEL_POLICY, (e) => {
+  const onPolicy = (e) => {
     try {
       configure(e.detail);
     } catch {
       /* malformed payload; keep running on the previous policy */
     }
-  });
+  };
+  rawAdd.call(document, CHANNEL_POLICY, onPolicy);
+  // Registered through the undo stack like every other patch here. Left outside
+  // it, this listener outlived disable(): the next policy push found a torn
+  // down engine, switched it back on, reinstalled the capture net and swept a
+  // page the user had just relocked, with the handle already deleted so nothing
+  // could turn it off a second time.
+  undo.push(() => rawRemove.call(document, CHANNEL_POLICY, onPolicy));
 
   install();
 
