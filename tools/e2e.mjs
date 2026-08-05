@@ -275,19 +275,52 @@ function judge(phase, testCase, got) {
 async function runPhase(cdp, page, phase, results) {
   for (const testCase of CASES) {
     let got;
+    let threw = false;
     try {
       got = await runCase(cdp, page, testCase);
     } catch (err) {
       got = `<error: ${err.message}>`;
+      threw = true;
     }
-    const { pass, detail } = judge(phase, testCase, got);
+    // A harness error is never a pass. Every negative assertion here scores by
+    // "the clipboard does not hold the expected text", and a case that blew up
+    // satisfies that trivially, so a broken harness reported the baseline phase
+    // green while no case had actually run. Baseline is the phase that exists
+    // to prove the fixture still blocks, so that failure mode hides everything.
+    const { pass, detail } = threw
+      ? { pass: false, detail: `harness error: ${got}` }
+      : judge(phase, testCase, got);
     results.push({ phase, id: testCase.id, label: testCase.label, pass, detail });
   }
 }
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * Refuse to run when something is already serving devtools on our port.
+ *
+ * A run that dies partway leaves its browser behind holding the port, and the
+ * next run then attaches to that one: an older build, a different profile, and
+ * a service worker whose id will never match, so the whole suite fails on a
+ * timeout that says nothing about the code. Saying so up front is worth more
+ * than the twenty minutes of reading a result that describes another build.
+ */
+async function assertPortFree() {
+  let existing;
+  try {
+    existing = await httpJson(PORT, '/json/version');
+  } catch {
+    return;
+  }
+  throw new Error(
+    `port ${PORT} is already serving devtools (${existing.Browser || 'unknown browser'}). ` +
+      'A previous run left its browser running. Kill it and try again, or this suite ' +
+      'attaches to that browser and tests whatever build it was launched with.'
+  );
+}
+
 async function main() {
+  await assertPortFree();
   const { dir, extensionId } = await buildTestVariant();
   const { server, port: filePort } = await serveDir(path.join(ROOT, 'test-pages'));
   const origin = `http://127.0.0.1:${filePort}`;
