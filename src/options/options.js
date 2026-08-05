@@ -19,22 +19,25 @@
     }
   }
 
+  /**
+   * Which run of loadSites owns the list.
+   *
+   * Every row waits on its own permissions.contains, which is long enough for a
+   * second run to start and overtake this one. Both runs used to clear the list
+   * and then append across those awaits, so the older one put back rows the
+   * newer one had already removed and a site reappeared after being deleted.
+   * Gathering first and rendering in one synchronous pass leaves no window.
+   */
+  let generation = 0;
+
   async function loadSites() {
+    const mine = ++generation;
     const { sites } = await UC.settings.readAll();
     const origins = Object.keys(sites)
       .filter((origin) => sites[origin] && sites[origin].always)
       .sort();
 
-    sitesEl.textContent = '';
-
-    if (!origins.length) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.textContent = 'None yet. Use "Always unlock this site" in the popup.';
-      sitesEl.appendChild(li);
-      return;
-    }
-
+    const rows = [];
     for (const origin of origins) {
       let granted = false;
       try {
@@ -42,7 +45,22 @@
       } catch {
         granted = false;
       }
+      rows.push({ origin, granted });
+    }
 
+    if (mine !== generation) return;
+
+    sitesEl.textContent = '';
+
+    if (!rows.length) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'None yet. Use "Always unlock this site" in the popup.';
+      sitesEl.appendChild(li);
+      return;
+    }
+
+    for (const { origin, granted } of rows) {
       const li = document.createElement('li');
 
       const label = document.createElement('span');
@@ -68,6 +86,11 @@
         // reintroduce the lost-update race it exists to prevent.
         await api.runtime.sendMessage({ type: 'unlock-copy/forget-site', origin });
         await loadSites();
+        // The list is rebuilt from scratch, so the button that was focused is
+        // gone and focus falls back to the document. Without this a keyboard
+        // user is returned to the top of the page after every removal.
+        const next = sitesEl.querySelector('button.remove');
+        (next || sitesEl).focus();
       });
       li.appendChild(button);
 

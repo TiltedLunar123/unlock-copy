@@ -71,7 +71,9 @@
       <section>
         <h2>Always unlocked</h2>
         <p class="hint" id="sites-hint">Sites you chose to unlock on every visit.</p>
-        <ul class="sites" id="sites"></ul>
+        <!-- tabindex so focus has somewhere to land once the last row is
+             removed, aria-live so a removal is announced rather than silent. -->
+        <ul class="sites" id="sites" tabindex="-1" aria-live="polite"></ul>
       </section>
 
       <section>
