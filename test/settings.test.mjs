@@ -94,7 +94,10 @@ test('reads still degrade to defaults when storage is unavailable', async () => 
   assert.equal(all.ok, false);
   assert.deepEqual(plain(all.sites), {});
   assert.equal(all.defaults.selection, true, 'the defaults are still usable');
-  assert.deepEqual(plain(await settings.alwaysOrigins()), []);
+  // Null, not an empty list. reconcile() unregisters everything absent from
+  // this answer, so "I could not read it" has to be distinguishable from
+  // "the user wants none".
+  assert.equal(await settings.alwaysOrigins(), null);
 });
 
 test('a successful read is marked as one', async () => {

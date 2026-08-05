@@ -99,8 +99,22 @@ UC.settings = (function () {
     });
   }
 
+  /**
+   * Origins the user asked to always unlock, or null when the store could not
+   * be read.
+   *
+   * Null and empty are different answers and the caller acts on the difference.
+   * The reconciler unregisters everything the user does not want, so an empty
+   * list handed over because storage blinked means every always-unlock site on
+   * the machine loses its content script, and nothing puts them back until the
+   * user notices and toggles something. Same reasoning as the `ok` flag on a
+   * write: degrading to defaults is fine for a reader and destructive for
+   * anything that acts on the answer.
+   */
   async function alwaysOrigins() {
-    const { sites } = await readAll();
+    const state = await readAll();
+    if (!state.ok) return null;
+    const { sites } = state;
     return Object.keys(sites).filter((origin) => sites[origin] && sites[origin].always);
   }
 
