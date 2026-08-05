@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.0.2 - 2026-08-05
+
+Bug fixes, no new features.
+
+Three of these could stop "always unlock" working on a site while the
+popup went on saying it was on:
+
+- Two sites whose addresses differ only in punctuation, such as
+  `docs.google.com` and `docs-google.com`, shared one slot internally.
+  Turning both on meant the second one never actually ran.
+- If the browser could not read this extension's settings even once,
+  every site on the always-unlock list was quietly switched off, and
+  nothing turned them back on until you opened the popup and changed
+  something.
+- On Firefox, the settings for an always-unlocked site never reached the
+  page, so per-site switches were ignored there.
+
+Sites that were still winning:
+
+- A site that blocks Ctrl+C by assigning `document.onkeydown` kept
+  working. The same block written the other common way was already
+  handled, which is what made this hard to spot.
+- A site that clears your selection on a timer can do it with `collapse`
+  instead of `removeAllRanges`. Only the second was covered.
+
+Things this extension was doing that it should not:
+
+- An editor that deliberately cancels its own copy had that cancellation
+  overridden. Returning false from a handler is a real way to cancel,
+  and the fix for sites abusing it was defeating every honest use too,
+  including on features you had switched off.
+- Relocking a page did not stick. Changing any setting afterwards
+  switched the page back on, and nothing could turn it off again short
+  of a reload.
+- Changing a setting re-applied the unlock to every tab it could reach,
+  including tabs you had just relocked and tabs you never unlocked.
+- Turning "Text selection and copy" off relocked the page everywhere
+  except inside components built with shadow DOM.
+- Unlocking from the toolbar on a site that was already set to always
+  unlock switched it to the blunter method, which stops the page's own
+  copy buttons and editors from running at all.
+
+The rest:
+
+- The popup said "Unlocked, on every time you visit this site" over a
+  page the keyboard shortcut had just relocked, and the only button it
+  offered then forgot the site entirely instead of unlocking the page.
+- A local file with a percent sign in its name, such as
+  `holiday%zz.html`, made the popup show a raw error, and left every
+  other open tab on the previous settings.
+- Aggressive mode unblocks pasting, but left `onpaste="return false"` on
+  the field itself alone, which is how most sites write it.
+- Removing a site on the options page could bring back a site removed a
+  moment earlier, and moved keyboard focus to the top of the page.
+
+Under the hood, three checks were not checking:
+
+- The release gate said every shipped file must parse and only looked
+  for stray control characters. Nothing else covers the popup or the
+  options page, so a syntax error in either would have shipped.
+- It also wrote the store zips before running, so a failing gate still
+  left finished-looking files next to its own error message.
+- The end to end suite scored a crashed test as a pass, which mattered
+  most for the run that exists to prove the test page still blocks
+  anything at all. It caught two real harness failures within an hour of
+  being fixed.
+
 ## 1.0.1 - 2026-08-02
 
 Bug fixes, no new features.
