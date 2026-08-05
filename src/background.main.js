@@ -103,11 +103,16 @@
     await api.scripting.executeScript({
       target: { tabId, allFrames: true },
       world: 'MAIN',
-      func: (policy) => {
-        window.__unlockCopyBoot = policy;
-        if (window.__unlockCopyEngine) window.__unlockCopyEngine.configure(policy);
+      func: (boot, live) => {
+        window.__unlockCopyBoot = boot;
+        // A frame that already has an engine keeps its own mode. The boot
+        // payload is for the frames that do not, and telling a frame unlocked
+        // at document_start that it started late trades the wrapping it was
+        // built on for the blunt capture net, which drops the page's own copy
+        // handlers instead of neutering them.
+        if (window.__unlockCopyEngine) window.__unlockCopyEngine.configure(live);
       },
-      args: [page],
+      args: [page, UC.policy.withoutMode(page)],
     });
 
     await api.scripting.executeScript({
