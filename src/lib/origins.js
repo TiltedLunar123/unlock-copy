@@ -101,9 +101,25 @@ UC.origins = (function () {
     return origin.replace(/\/+$/, '') + '/*';
   }
 
-  /** Content script registration ids have to be stable and filesystem-safe. */
+  /**
+   * Content script registration ids: stable, filesystem-safe, and distinct for
+   * distinct origins.
+   *
+   * Collapsing every run of punctuation into one dash reads better and is not
+   * injective. `https://docs.google.com` and `https://docs-google.com` are both
+   * ordinary origins and both sanitise to `https-docs-google-com`, so the two
+   * share one pair of ids: the reconciler sees the second as already registered,
+   * never registers it, and the popup goes on reporting it as always unlocked
+   * while no content script ever runs there.
+   *
+   * Encoding each character it cannot keep, rather than merging runs of them,
+   * makes the mapping reversible, and a reversible mapping cannot collide.
+   */
   function scriptIdFor(origin) {
-    return 'uc-' + origin.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    return (
+      'uc-' +
+      String(origin).replace(/[^a-z0-9]/g, (c) => '_' + c.charCodeAt(0).toString(36) + '_')
+    );
   }
 
   const MESSAGES = {

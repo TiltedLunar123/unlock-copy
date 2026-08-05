@@ -98,3 +98,17 @@ test('ids never collide across origins, including adversarial ones', () => {
     }
   }
 });
+
+test('two origins that differ only in punctuation get different ids', () => {
+  // `https://docs.google.com` and `https://docs-google.com` are both ordinary
+  // origins, and a sanitiser that collapses every run of punctuation to a dash
+  // maps them onto one id. The second one to be turned on then looks fully
+  // registered to plan(), never gets a content script, and the popup still
+  // reports it as always unlocked.
+  const dotted = 'https://docs.google.com';
+  const dashed = 'https://docs-google.com';
+  assert.notDeepEqual(idsOf(dotted), idsOf(dashed));
+
+  const decision = plan([dotted, dashed], [dotted, dashed], bothIds(dotted));
+  assert.deepEqual(plain(decision.register), [dashed], 'the second origin still needs registering');
+});
