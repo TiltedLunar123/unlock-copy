@@ -19,11 +19,33 @@
 
   let latest = null;
 
+  /**
+   * Hand an object across the world boundary in a form page script can read.
+   *
+   * On Firefox a content script gets its own compartment, and an object built
+   * here reaches page code wrapped in a security membrane that makes its
+   * properties unreadable. cloneInto is the documented way across, and it only
+   * exists there, so Chromium keeps passing the object straight through.
+   *
+   * Note this is unverified against a real Firefox build; the end to end suite
+   * drives Chromium only. It is written so that being wrong about the platform
+   * costs nothing: the clone is skipped where the function does not exist, and
+   * a clone that fails falls back to the object that was being sent anyway.
+   */
+  function shareable(value) {
+    if (typeof cloneInto !== 'function') return value;
+    try {
+      return cloneInto(value, document.defaultView);
+    } catch {
+      return value;
+    }
+  }
+
   function send(policy) {
     if (!policy) return;
     latest = policy;
     try {
-      document.dispatchEvent(new CustomEvent(CHANNEL_POLICY, { detail: policy }));
+      document.dispatchEvent(new CustomEvent(CHANNEL_POLICY, { detail: shareable(policy) }));
     } catch {
       /* page tore down document; nothing to deliver to */
     }
