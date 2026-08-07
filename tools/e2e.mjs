@@ -113,6 +113,12 @@ const CASES = [
     rectExpr: "document.getElementById('host19').shadowRoot.getElementById('t19')",
   },
   {
+    id: '20',
+    label: 'blocked content inside contenteditable=false',
+    sel: '#t20',
+    expect: 'UNLOCKCOPY-20-CEFALSE',
+  },
+  {
     id: 'E',
     label: 'editor keeps its own copy handler',
     sel: '#tE',

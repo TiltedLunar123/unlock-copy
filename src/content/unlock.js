@@ -109,7 +109,14 @@
    * "breaks Google Docs" one-star magnet.
    */
   const EDITOR_SELECTOR = [
-    '[contenteditable]',
+    // Matched by value, not by presence. `contenteditable="false"` is the
+    // spelling for "explicitly not editable" and it is ordinary markup: rich
+    // text editors use it to mark non-editable islands, and a page can wrap its
+    // article in one. Matching the bare attribute read every one of those as an
+    // editor and handed it the exemption, so the content people installed this
+    // for stayed locked. isContentEditable, checked first in isEditor, already
+    // answers this correctly; only the selector was wrong.
+    '[contenteditable]:not([contenteditable="false" i])',
     '[role="textbox"]',
     '.CodeMirror',
     '.cm-editor',
