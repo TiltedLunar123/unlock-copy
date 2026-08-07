@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.0.3 - 2026-08-07
+
+Bug fixes, no new features.
+
+Sites that were still winning:
+
+- A page that wraps its content in a block marked as not editable stayed
+  locked. That marking is ordinary and common, and this extension was
+  reading it as "this is an editor, leave it alone", which is the
+  opposite of what it means.
+- Blocks re-applied through the less common spellings of the same
+  operation got through. The usual one was already refused.
+- Aggressive mode did not unblock pasting on a site that blocks it by
+  assigning the handler directly to the field. The other two ways of
+  writing that block were already covered.
+- An always-unlocked site shown inside another site's page never got the
+  part of the unlock that beats a plain CSS lock, so it stayed locked for
+  the whole visit.
+
+Things this extension was doing that it should not:
+
+- A site's own "copy this snippet" button copied whatever you had
+  selected before instead of the snippet. The guard that stops a site
+  clearing your selection on a timer was also refusing the ordinary case
+  of a page selecting its own content for you.
+- Turning "Text selection and copy" off still stripped copy handlers out
+  of the page. A switch you had moved went on acting.
+- Relocking did not fully put things back. In aggressive mode an overlay
+  could stay clicked-through for good, and a handler the page had
+  installed was left running with no way for the page to remove it.
+- Relocking sometimes left the page selectable anyway, if the unlock had
+  been applied twice at once.
+
+Settings:
+
+- If the browser could not read this extension's settings at the moment
+  you changed a switch, every open tab was reset to the factory switches
+  and stayed that way until reloaded. It now leaves your pages alone.
+- The settings page could show a switch it had not managed to save, so it
+  disagreed with every page you visited and said nothing about it. It
+  also reported "None yet" when it simply could not read your saved
+  sites, which invited you to add them all over again.
+- Turning on "Always unlock this site" while the tab moved underneath you
+  could grant access to one site and remember a different one. Permission
+  the extension asks for and then cannot use is handed straight back.
+
 ## 1.0.2 - 2026-08-05
 
 Bug fixes, no new features.

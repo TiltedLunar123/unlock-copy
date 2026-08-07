@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Unlock Copy engine fixture</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 14px/1.5 system-ui, sans-serif;
+      }
+      /*
+        The shield heuristic only fires on a positioned, empty element covering
+        more than half the viewport, so this has to be a real one rather than a
+        stand-in. It carries no inline pointer-events, which is the point: the
+        engine has to put it back to absent, not to a value it invented.
+      */
+      #overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        background: transparent;
+      }
+      #target {
+        position: relative;
+        z-index: 20;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay"></div>
+    <p id="target">UNLOCKCOPY-TEARDOWN-TARGET</p>
+    <input id="pastefield" value="" />
+  </body>
+</html>

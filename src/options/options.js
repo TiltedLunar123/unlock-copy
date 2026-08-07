@@ -32,7 +32,21 @@
 
   async function loadSites() {
     const mine = ++generation;
-    const { sites } = await UC.settings.readAll();
+    const state = await UC.settings.readAll();
+    // An unreadable store degrades to an empty site list, and rendering that as
+    // "None yet" tells the user every site they saved is gone. Saying the list
+    // could not be read is the honest version, and it stops them adding sites
+    // back over ones that are still there.
+    if (!state.ok) {
+      if (mine !== generation) return;
+      sitesEl.textContent = '';
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'Your saved sites could not be read just now. Try reopening this page.';
+      sitesEl.appendChild(li);
+      return;
+    }
+    const { sites } = state;
     const origins = Object.keys(sites)
       .filter((origin) => sites[origin] && sites[origin].always)
       .sort();
@@ -100,12 +114,23 @@
 
   for (const input of document.querySelectorAll('[data-feature]')) {
     input.addEventListener('change', async (event) => {
-      await api.runtime.sendMessage({
-        type: 'unlock-copy/set-feature',
-        feature: event.target.dataset.feature,
-        value: event.target.checked,
-        scope: 'global',
-      });
+      let result = null;
+      try {
+        result = await api.runtime.sendMessage({
+          type: 'unlock-copy/set-feature',
+          feature: event.target.dataset.feature,
+          value: event.target.checked,
+          scope: 'global',
+        });
+      } catch {
+        result = null;
+      }
+      // The reply carries an ok flag and this was dropping it, so a write that
+      // never landed left the switch sitting in the new position. The user then
+      // had a settings page disagreeing with every page they visit and nothing
+      // saying why. Re-read rather than just flipping the checkbox back: what is
+      // stored is the only thing that knows what actually happened.
+      if (!result || !result.ok) await loadDefaults();
     });
   }
 
