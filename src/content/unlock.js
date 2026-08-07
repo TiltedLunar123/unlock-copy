@@ -811,8 +811,30 @@
    * Collapsing the selection empties it just as effectively, so a patch that
    * only knew the textbook name let a page win by renaming one call.
    */
+  /**
+   * Selections whose clear was refused, so an add can carry it out later.
+   *
+   * A watchdog calls removeAllRanges and nothing else. A page swapping the
+   * selection to its own content calls removeAllRanges and then addRange, which
+   * is how every "copy this snippet" button on every documentation site works.
+   * Refusing the clear breaks the second one and does it silently: addRange does
+   * nothing while a range is already present, so whatever the user had selected
+   * before survives and the button copies that instead of the snippet.
+   *
+   * Remembering the refusal is what tells the two apart without guessing. The
+   * watchdog never adds anything, so it stays defeated.
+   */
+  const deferredClear = new WeakSet();
+
   function patchSelection() {
     if (typeof Selection !== 'function') return;
+
+    // Captured before the loop below replaces it, or the deferred clear would
+    // call the guard again and refuse itself.
+    const removeAllDesc = Object.getOwnPropertyDescriptor(Selection.prototype, 'removeAllRanges');
+    const rawRemoveAll =
+      removeAllDesc && typeof removeAllDesc.value === 'function' ? removeAllDesc.value : null;
+
     const names = [
       'removeAllRanges',
       'empty',
@@ -837,12 +859,34 @@
             anchor = null;
           }
           const subject = subjectOf(arguments[0]) || anchor;
-          if (!subject || !isEditor(subject)) return undefined;
+          if (!subject || !isEditor(subject)) {
+            deferredClear.add(this);
+            return undefined;
+          }
         }
         return original.apply(this, arguments);
       };
       undo.push(() => Object.defineProperty(Selection.prototype, name, desc));
     }
+
+    // The other half: an add is proof the clear before it was a swap.
+    const addDesc = Object.getOwnPropertyDescriptor(Selection.prototype, 'addRange');
+    if (!rawRemoveAll || !addDesc || !addDesc.configurable || typeof addDesc.value !== 'function') {
+      return;
+    }
+    const rawAddRange = addDesc.value;
+    Selection.prototype.addRange = function () {
+      if (deferredClear.has(this)) {
+        deferredClear.delete(this);
+        try {
+          rawRemoveAll.call(this);
+        } catch {
+          /* nothing to clear, which is the state the add wanted anyway */
+        }
+      }
+      return rawAddRange.apply(this, arguments);
+    };
+    undo.push(() => Object.defineProperty(Selection.prototype, 'addRange', addDesc));
   }
 
   /* ---------------------------------------------------------------- */

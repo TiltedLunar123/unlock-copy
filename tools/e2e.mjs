@@ -113,6 +113,16 @@ const CASES = [
     rectExpr: "document.getElementById('host19').shadowRoot.getElementById('t19')",
   },
   {
+    id: '21',
+    label: 'the page swaps the selection to its own content',
+    expect: 'UNLOCKCOPY-21-SWAP',
+    // Something else is selected first, so the swap has a previous selection to
+    // clear. With nothing selected the clear is a no-op and the bug hides.
+    selectExpr:
+      "(() => { getSelection().selectAllChildren(document.getElementById('t0')); window.__swap21(); })()",
+    blocks: false,
+  },
+  {
     id: '20',
     label: 'blocked content inside contenteditable=false',
     sel: '#t20',
@@ -622,6 +632,9 @@ async function main() {
 
     const { webSocketDebuggerUrl } = await httpJson(PORT, '/json/version');
     const cdp = await CDP.connect(webSocketDebuggerUrl);
+    // So shutdown can ask the browser to close itself, which is the only thing
+    // that reliably ends it.
+    session.cdp = cdp;
 
     await cdp.send('Browser.grantPermissions', {
       origin,
@@ -723,7 +736,9 @@ async function launchWithExtension(dir) {
     { stdio: 'ignore' }
   );
   await waitFor('devtools endpoint', () => httpJson(PORT, '/json/version'), { timeout: 25000 });
-  return { child, profile };
+  // The port travels with the session so shutdown can wait on the thing that
+  // actually blocks the next run, rather than on the process it spawned.
+  return { child, profile, port: PORT };
 }
 
 function report(results) {

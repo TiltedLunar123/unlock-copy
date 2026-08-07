@@ -184,6 +184,18 @@
     </section>
 
     <section>
+      <h2>21 the page swaps the selection to its own content, must keep working</h2>
+      <!--
+        The "copy this snippet" button every documentation site has:
+        removeAllRanges() then addRange(). Nothing blocks here, so this must
+        produce its text in every phase including baseline. It is the control
+        for the selection watchdog guard, which cannot be allowed to refuse the
+        clear half of an ordinary selection swap.
+      -->
+      <p id="t21">UNLOCKCOPY-21-SWAP</p>
+    </section>
+
+    <section>
       <h2>20 blocked content wrapped in contenteditable="false"</h2>
       <!--
         contenteditable="false" is the spelling that says "explicitly not
@@ -249,6 +261,15 @@
           selection.removeAllRanges();
         }
       }, 40);
+
+      /* ---- 21: the site's own "select my snippet" button ---- */
+      window.__swap21 = () => {
+        const range = document.createRange();
+        range.selectNodeContents(document.getElementById('t21'));
+        const selection = document.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      };
 
       /* ---- 20: ordinary document level block, inside a non-editable wrapper ---- */
       document.addEventListener('copy', (e) => {
