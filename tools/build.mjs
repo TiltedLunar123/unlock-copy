@@ -14,7 +14,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import { deflateRaw } from 'node:zlib';
 import { promisify } from 'node:util';
@@ -298,12 +298,38 @@ async function check(base) {
  * `//` inside a URL string, and getting that wrong either hides a real call or
  * blocks a clean build.
  */
-function blankCommentsAndStrings(source) {
+export function blankCommentsAndStrings(source) {
   const out = source.split('');
   const blank = (from, to) => {
     for (let k = from; k < to && k < out.length; k++) {
       if (out[k] !== '\n') out[k] = ' ';
     }
+  };
+
+  /**
+   * The last thing that could end an expression, which is how a `/` is told
+   * apart from the start of a regex literal.
+   */
+  let previous = '';
+  const KEYWORDS_BEFORE_REGEX = new Set([
+    'return',
+    'typeof',
+    'instanceof',
+    'case',
+    'in',
+    'of',
+    'new',
+    'delete',
+    'void',
+    'do',
+    'else',
+    'yield',
+    'await',
+  ]);
+  const startsRegex = () => {
+    if (!previous) return true;
+    if (/[(,=:[!&|?{};+\-*~^%<>]/.test(previous)) return true;
+    return KEYWORDS_BEFORE_REGEX.has(previous);
   };
 
   let i = 0;
@@ -326,6 +352,35 @@ function blankCommentsAndStrings(source) {
     }
 
     const ch = source[i];
+
+    // A regex literal has to be consumed whole. Without this the escaped slash
+    // before a terminator, as in /^https?:\/\//, reads as the start of a line
+    // comment and everything after it on that line is blanked, so the network
+    // scan below is blind to any call sharing a line with a pattern like that.
+    if (ch === '/' && startsRegex()) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length) {
+        const c = source[j];
+        if (c === '\\') {
+          j += 2;
+          continue;
+        }
+        // An unterminated literal is far more likely to be a division this
+        // heuristic misread than a regex, so stop at the line rather than
+        // blanking the rest of the file.
+        if (c === '\n') break;
+        if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        else if (c === '/' && !inClass) break;
+        j++;
+      }
+      blank(i + 1, j);
+      i = j + 1;
+      previous = '/';
+      continue;
+    }
+
     if (ch === '"' || ch === "'" || ch === '`') {
       let j = i + 1;
       while (j < source.length) {
@@ -341,7 +396,21 @@ function blankCommentsAndStrings(source) {
       }
       blank(i + 1, j);
       i = j + 1;
+      // A string ends an expression, so a slash after one is division.
+      previous = '"';
       continue;
+    }
+
+    if (!/\s/.test(ch)) {
+      // Words are tracked whole, so `return /re/` is not read as division.
+      if (/[A-Za-z0-9_$]/.test(ch)) {
+        let j = i;
+        while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
+        previous = source.slice(i, j);
+        i = j;
+        continue;
+      }
+      previous = ch;
     }
     i++;
   }
@@ -477,7 +546,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only when run directly, so the scanner above can be imported and tested
+// rather than only exercised through a whole build.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
