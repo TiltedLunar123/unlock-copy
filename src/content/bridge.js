@@ -41,6 +41,25 @@
     }
   }
 
+  /**
+   * Whether this frame should be the one to ask for the USER origin stylesheet.
+   *
+   * The top frame asks when it can, so nested same-origin frames stay quiet. A
+   * frame whose top is cross-origin has to ask for itself: the bridge is only
+   * registered on origins the user turned on, so a page from another origin has
+   * no bridge in it and there is nobody above to ask on this frame's behalf.
+   */
+  function shouldRequestCss() {
+    if (window.top === window) return true;
+    try {
+      // Reading location across a cross-origin boundary throws, and that throw
+      // is the answer: there is no bridge of ours up there.
+      return !window.top.location.href;
+    } catch {
+      return true;
+    }
+  }
+
   function send(policy) {
     if (!policy) return;
     latest = policy;
@@ -70,9 +89,13 @@
       // block and a plain `user-select: none` still wins, which is the exact
       // half-working behaviour this extension exists to fix.
       //
-      // Only the top frame asks, and the background covers all frames in one
-      // call, so nested frames do not each trigger their own insert.
-      if (policy && policy.selection && window.top === window) {
+      // Normally only the top frame asks, because the background covers every
+      // frame in one call and nested frames would each trigger a redundant
+      // round trip. That is an optimisation, and it was being applied as a rule:
+      // when this origin is embedded in a page from a different one, the top
+      // frame has no bridge of ours in it, nobody asks at all, and the frame
+      // stays CSS locked for the whole visit.
+      if (policy && policy.selection && shouldRequestCss()) {
         api.runtime.sendMessage({ type: 'unlock-copy/ensure-css' }).catch(() => {});
       }
     })
