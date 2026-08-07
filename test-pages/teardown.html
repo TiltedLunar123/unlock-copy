@@ -31,5 +31,12 @@
     <div id="overlay"></div>
     <p id="target">UNLOCKCOPY-TEARDOWN-TARGET</p>
     <input id="pastefield" value="" />
+    <!--
+      An editor that places its own caret. The selection guard refuses a clear
+      aimed at ordinary page content, and the exemption that lets a real editor
+      through had nothing asserting it: refusing every editor too kept all three
+      clipboard phases green, because no fixture editor moved its own caret.
+    -->
+    <div id="editor" contenteditable="true">UNLOCKCOPY-EDITOR-CARET</div>
   </body>
 </html>
