@@ -77,26 +77,61 @@
    * nothing to selection until a reload. Removing first makes the insert
    * idempotent regardless of how the browser counts them.
    */
-  async function applyCss(tabId) {
-    const target = { tabId, allFrames: true };
-    try {
-      await api.scripting.removeCSS({ target, origin: 'USER', css: UC.policy.CSS });
-    } catch {
-      /* nothing inserted yet, which is the state we wanted */
-    }
-    await api.scripting.insertCSS({ target, origin: 'USER', css: UC.policy.CSS });
+  /**
+   * One stylesheet operation per tab at a time.
+   *
+   * Making the insert idempotent depends on the remove landing immediately
+   * before it, and those are two separate round trips. Two callers reaching one
+   * tab at once interleave into remove, remove, insert, insert, which is the
+   * stacking the remove exists to prevent, and the single remove that lock()
+   * performs then peels one layer off and leaves the other: the page stays
+   * selectable after the user relocked it. The bridge asking for CSS while a
+   * toolbar unlock is still in flight is enough, and on an always-unlock site
+   * that is the ordinary case rather than a rare one.
+   *
+   * Same chaining the settings writes use, for the same reason.
+   */
+  const cssQueues = new Map();
+
+  function serializeCss(tabId, work) {
+    const previous = cssQueues.get(tabId) || Promise.resolve();
+    const run = previous.then(work, work);
+    // Kept alive through failures, or one refused tab wedges every later
+    // operation on it.
+    cssQueues.set(
+      tabId,
+      run.then(
+        () => {},
+        () => {}
+      )
+    );
+    return run;
   }
 
-  async function dropCss(tabId) {
-    try {
-      await api.scripting.removeCSS({
-        target: { tabId, allFrames: true },
-        origin: 'USER',
-        css: UC.policy.CSS,
-      });
-    } catch {
-      /* the stylesheet was never inserted */
-    }
+  function applyCss(tabId) {
+    return serializeCss(tabId, async () => {
+      const target = { tabId, allFrames: true };
+      try {
+        await api.scripting.removeCSS({ target, origin: 'USER', css: UC.policy.CSS });
+      } catch {
+        /* nothing inserted yet, which is the state we wanted */
+      }
+      await api.scripting.insertCSS({ target, origin: 'USER', css: UC.policy.CSS });
+    });
+  }
+
+  function dropCss(tabId) {
+    return serializeCss(tabId, async () => {
+      try {
+        await api.scripting.removeCSS({
+          target: { tabId, allFrames: true },
+          origin: 'USER',
+          css: UC.policy.CSS,
+        });
+      } catch {
+        /* the stylesheet was never inserted */
+      }
+    });
   }
 
   async function applyNow(tabId, page) {
@@ -504,7 +539,12 @@
       paintBadge(tabId, false);
     }
   });
-  api.tabs.onRemoved.addListener((tabId) => sessionTabs.delete(tabId));
+  api.tabs.onRemoved.addListener((tabId) => {
+    sessionTabs.delete(tabId);
+    // The queue is keyed by tab, so without this the map is a slow leak across
+    // a long browser session.
+    cssQueues.delete(tabId);
+  });
 
   // Revoking a host permission from the browser's own UI has to turn the site
   // off here too, otherwise the popup keeps claiming it is on.
@@ -524,6 +564,8 @@
   UC.background = {
     applyNow,
     removeNow,
+    applyCss,
+    dropCss,
     getState,
     unlockOnce,
     lock,

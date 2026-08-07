@@ -143,6 +143,25 @@ test('a settings read that failed does not broadcast anything', async () => {
   assert.deepEqual(plain(state.css), [], 'touched the stylesheet on a guess');
 });
 
+test('two stylesheet operations on one tab do not interleave', async () => {
+  // applyCss is a remove followed by an insert, and the remove is what keeps
+  // the insert idempotent. Those are two separate round trips, so two callers
+  // reaching one tab at once produced remove, remove, insert, insert: two
+  // stylesheets on the tab. lock() performs a single remove, so it peeled one
+  // off and left the other, and the page stayed selectable after the user had
+  // relocked it. The bridge asking for CSS while a toolbar unlock is still in
+  // flight is enough to hit this.
+  const { background, state } = await load({ stored: { defaults: {}, sites: {} } });
+
+  await Promise.all([background.applyCss(9), background.applyCss(9)]);
+
+  assert.deepEqual(
+    plain(state.css),
+    ['remove', 'insert', 'remove', 'insert'],
+    'the two operations interleaved, leaving the tab with a stylesheet too many'
+  );
+});
+
 test('remembering a site refuses when the tab moved on under the popup', async () => {
   // The popup asks the user for a permission on the origin it last rendered,
   // then tells the background to store it. The background derives its own
