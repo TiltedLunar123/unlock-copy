@@ -113,6 +113,21 @@ const CASES = [
     rectExpr: "document.getElementById('host19').shadowRoot.getElementById('t19')",
   },
   {
+    id: '22',
+    label: "an honest copy listener still runs",
+    sel: '#t22',
+    expect: 'UNLOCKCOPY-22-SIDEEFFECT',
+    // Nothing blocks here and the listener has no opinion about the copy, so the
+    // clipboard is the same whether it ran or not. The probe is the assertion.
+    blocks: false,
+    resetExpr: 'window.__case22 = undefined',
+    probeExpr: 'window.__case22 || null',
+    probeExpect: 'ran',
+    // Not in late: the capture net stops the event before anything the page
+    // registered lower down, which is the documented cost of a late unlock.
+    probePhases: ['baseline', 'early'],
+  },
+  {
     id: '21',
     label: 'the page swaps the selection to its own content',
     expect: 'UNLOCKCOPY-21-SWAP',
@@ -251,6 +266,9 @@ async function runCase(cdp, page, testCase) {
   // Park a sentinel so a copy that never happens is distinguishable from a copy
   // that produced the right text.
   await cdp.evaluate(page, `navigator.clipboard.writeText(${JSON.stringify(SENTINEL)})`);
+  // A case whose listener records a side effect has to clear it first, or the
+  // previous phase's run answers for this one.
+  if (testCase.resetExpr) await cdp.evaluate(page, testCase.resetExpr);
 
   if (testCase.drag) {
     await dragSelect(cdp, page, testCase);
@@ -275,12 +293,34 @@ async function runCase(cdp, page, testCase) {
   await sleep(120);
 
   if (testCase.refocus) await cdp.evaluate(page, 'window.focus()');
-  return cdp.evaluate(page, 'navigator.clipboard.readText()');
+  const text = await cdp.evaluate(page, 'navigator.clipboard.readText()');
+  const probe = testCase.probeExpr ? await cdp.evaluate(page, testCase.probeExpr) : undefined;
+  return { text, probe };
 }
 
 /* ------------------------------------------------------------------ */
 /* Phases                                                              */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Did the page's own listener actually run?
+ *
+ * The clipboard cannot answer that for a listener which neither cancels the
+ * copy nor rewrites it, and every other listener in the fixture is hostile, so
+ * skipping one instead of wrapping it still produced the expected text. That is
+ * the one rule this engine is built on and nothing was checking it.
+ *
+ * Only asked in the phases where it has an answer. A late unlock stops the event
+ * during window capture, before anything the page registered lower down, so the
+ * listener genuinely does not run there. That is the documented cost of unlocking
+ * a page after its script has loaded, not a regression.
+ */
+function judgeProbe(phase, testCase, probe) {
+  if (!testCase.probeExpr) return null;
+  if (!(testCase.probePhases || []).includes(phase)) return null;
+  if (probe === testCase.probeExpect) return null;
+  return `the page's own listener did not run: probe is ${JSON.stringify(probe)}, expected ${JSON.stringify(testCase.probeExpect)}`;
+}
 
 function judge(phase, testCase, got) {
   const want = testCase.expect;
@@ -327,12 +367,12 @@ function judge(phase, testCase, got) {
 
 async function runPhase(cdp, page, phase, results) {
   for (const testCase of CASES) {
-    let got;
+    let got = { text: undefined, probe: undefined };
     let threw = false;
     try {
       got = await runCase(cdp, page, testCase);
     } catch (err) {
-      got = `<error: ${err.message}>`;
+      got = { text: `<error: ${err.message}>`, probe: undefined };
       threw = true;
     }
     // A harness error is never a pass. Every negative assertion here scores by
@@ -340,9 +380,17 @@ async function runPhase(cdp, page, phase, results) {
     // satisfies that trivially, so a broken harness reported the baseline phase
     // green while no case had actually run. Baseline is the phase that exists
     // to prove the fixture still blocks, so that failure mode hides everything.
-    const { pass, detail } = threw
-      ? { pass: false, detail: `harness error: ${got}` }
-      : judge(phase, testCase, got);
+    let { pass, detail } = threw
+      ? { pass: false, detail: `harness error: ${got.text}` }
+      : judge(phase, testCase, got.text);
+    // Asked only after the clipboard verdict, and it can only take a pass away.
+    if (!threw && pass) {
+      const probeFailure = judgeProbe(phase, testCase, got.probe);
+      if (probeFailure) {
+        pass = false;
+        detail = probeFailure;
+      }
+    }
     results.push({ phase, id: testCase.id, label: testCase.label, pass, detail });
   }
 }
@@ -476,6 +524,28 @@ async function engineChecks(cdp, sw, origin, results) {
     "document.getElementById('overlay').style.getPropertyValue('pointer-events')"
   );
   record('SH1', 'the shield actually fires on a full page overlay', shielded === 'none', `pointer-events is ${JSON.stringify(shielded)}; the restore check below proves nothing without this`);
+
+  // An editor collapsing its own selection is the exemption in patchSelection,
+  // and nothing asserted it. Refusing editors too left every clipboard phase
+  // green, because no fixture editor ever moved its own caret, while in the
+  // real world it freezes the caret in anything built on contenteditable.
+  const caret = await cdp.evaluate(
+    page,
+    `(() => {
+       const el = document.getElementById('editor');
+       const selection = getSelection();
+       selection.selectAllChildren(el);
+       const before = selection.isCollapsed;
+       selection.collapseToStart();
+       return { before, after: selection.isCollapsed, ranges: selection.rangeCount };
+     })()`
+  );
+  record(
+    'ED',
+    'an editor can still collapse its own selection',
+    caret.before === false && caret.after === true && caret.ranges === 1,
+    `selection was ${caret.before ? 'already collapsed' : 'a range'} and is now ${caret.after ? 'collapsed' : 'still a range'}, rangeCount ${caret.ranges}`
+  );
 
   // setAttribute is guarded, and it was the only spelling that was. The same
   // inline handler arrives just as intact through the namespaced call and

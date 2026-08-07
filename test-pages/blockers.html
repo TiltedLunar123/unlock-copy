@@ -184,6 +184,18 @@
     </section>
 
     <section>
+      <h2>22 an honest copy listener that neither cancels nor rewrites</h2>
+      <!--
+        Every other listener in this fixture is hostile, so dropping it instead
+        of wrapping it still produces the expected clipboard text and no case
+        notices. This one only records that it ran. It is the only thing here
+        that can tell "the page's listener was called" apart from "the page's
+        listener was skipped", which is the rule the whole design rests on.
+      -->
+      <p id="t22">UNLOCKCOPY-22-SIDEEFFECT</p>
+    </section>
+
+    <section>
       <h2>21 the page swaps the selection to its own content, must keep working</h2>
       <!--
         The "copy this snippet" button every documentation site has:
@@ -261,6 +273,11 @@
           selection.removeAllRanges();
         }
       }, 40);
+
+      /* ---- 22: a listener with a side effect and no opinion about the copy ---- */
+      document.getElementById('t22').addEventListener('copy', () => {
+        window.__case22 = 'ran';
+      });
 
       /* ---- 21: the site's own "select my snippet" button ---- */
       window.__swap21 = () => {
