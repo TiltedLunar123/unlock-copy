@@ -222,8 +222,26 @@ export async function shutdown(session) {
   } catch {
     /* already exited */
   }
-  await sleep(300);
+  // Wait for it to actually be gone rather than guessing at a delay. The browser
+  // holds the debugging port until its process ends, and the flat 300ms this
+  // used to sleep was regularly short of that, so two runs back to back failed
+  // on "a previous run left its browser running" when nothing had been left
+  // behind at all.
+  await waitForExit(session?.child, 8000);
   if (session?.profile) {
     await fs.rm(session.profile, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+function waitForExit(child, timeout) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return sleep(200);
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      // A moment past exit, because the socket outlives the process briefly.
+      setTimeout(resolve, 200);
+    };
+    const timer = setTimeout(resolve, timeout);
+    child.once('exit', finish);
+  });
 }
