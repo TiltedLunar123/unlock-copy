@@ -242,10 +242,16 @@
    * Firefox, so the popup asks first and only calls this once it holds the
    * grant. This function verifies rather than trusting.
    */
-  async function setAlways(tab, always) {
+  async function setAlways(tab, always, expectedOrigin) {
     await refreshFileAccess();
     const info = UC.origins.classify(tab && tab.url, { fileAccess: fileAccess() });
     if (!info.ok) return { ok: false, reason: info.reason };
+    // The caller asked the user for a specific origin. If the tab has moved on
+    // since, storing this one would record a site the user never agreed to and
+    // leave the granted permission attached to something else entirely.
+    if (expectedOrigin && expectedOrigin !== info.origin) {
+      return { ok: false, reason: 'origin-changed' };
+    }
     // A local file has no origin a permission can be scoped to. The popup
     // disables the toggle, but a disabled control is a UI convention rather
     // than a guarantee, and the pattern built from `file://` is not one the
@@ -458,7 +464,7 @@
     'unlock-copy/state': (msg, sender, tab) => getState(tab),
     'unlock-copy/unlock': (msg, sender, tab) => unlockOnce(tab),
     'unlock-copy/lock': (msg, sender, tab) => lock(tab),
-    'unlock-copy/set-always': (msg, sender, tab) => setAlways(tab, msg.value),
+    'unlock-copy/set-always': (msg, sender, tab) => setAlways(tab, msg.value, msg.origin),
     'unlock-copy/set-feature': (msg, sender, tab) =>
       setFeature(tab, msg.feature, msg.value, msg.scope),
     'unlock-copy/policy-for-frame': (msg, sender) => policyForFrame(sender),

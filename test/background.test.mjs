@@ -143,6 +143,40 @@ test('a settings read that failed does not broadcast anything', async () => {
   assert.deepEqual(plain(state.css), [], 'touched the stylesheet on a guess');
 });
 
+test('remembering a site refuses when the tab moved on under the popup', async () => {
+  // The popup asks the user for a permission on the origin it last rendered,
+  // then tells the background to store it. The background derives its own
+  // origin from the tab, so a tab that navigated while the popup was open makes
+  // those two different origins. Storing the tab's one records a site the user
+  // was never asked about, and leaves the grant they did agree to attached to
+  // something else. The popup hands over what it asked for so this can refuse.
+  const { background, state } = await load({ stored: { defaults: {}, sites: {} } });
+
+  const result = await background.setAlways(
+    { id: 1, url: 'https://after.example/page' },
+    true,
+    'https://before.example'
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'origin-changed');
+  assert.deepEqual(plain(state.stored.sites ?? {}), {}, 'stored a site the user never agreed to');
+});
+
+test('remembering a site works when the origin still matches', async () => {
+  // The other half: the guard is only correct if the ordinary path still lands.
+  const { background, state } = await load({ stored: { defaults: {}, sites: {} } });
+
+  const result = await background.setAlways(
+    { id: 1, url: 'https://same.example/page' },
+    true,
+    'https://same.example'
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(plain(state.stored.sites)['https://same.example'].always, true);
+});
+
 test('a settings read that worked broadcasts what the user actually chose', async () => {
   // The other half of the same contract: refusing to broadcast on a failed read
   // is only correct if a good read still gets through, so this pins the case the

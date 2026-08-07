@@ -135,17 +135,33 @@
 
       // permissions.request has to be called from inside the click that caused
       // it, which is why this lives in the popup rather than the background.
+      //
+      // The origin is pinned here and sent along, because this one is from the
+      // last render and the background re-derives its own from the tab. A tab
+      // that navigated while the popup was open makes those two different, and
+      // the grant would then be for a site the user is no longer looking at.
+      const origin = state.origin;
+      const pattern = UC.origins.patternFor(origin);
       let granted = false;
       try {
-        granted = await api.permissions.request({
-          origins: [UC.origins.patternFor(state.origin)],
-        });
+        granted = await api.permissions.request({ origins: [pattern] });
       } catch {
         granted = false;
       }
       if (!granted) return;
 
-      await send({ type: 'unlock-copy/set-always', value: true });
+      const result = await send({ type: 'unlock-copy/set-always', value: true, origin });
+      // A grant that was asked for and then could not be used is worse than no
+      // grant. Nothing in this extension mentions it again, so the user is left
+      // holding a host permission for a site it is not using and no way to see
+      // that from here.
+      if (!result || !result.ok) {
+        try {
+          await api.permissions.remove({ origins: [pattern] });
+        } catch {
+          /* nothing granted after all, which is the state we wanted */
+        }
+      }
     });
   });
 
