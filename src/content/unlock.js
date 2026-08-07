@@ -178,6 +178,43 @@
     stripped.push({ el, attr, value });
   }
 
+  /**
+   * Inline styles the aggressive shield overwrote, so relocking puts them back.
+   *
+   * Same reasoning as `stripped`, and the same failure without it: the undo
+   * stack restores patches, not DOM edits it has no record of, so a shielded
+   * overlay stayed click-through for the rest of the document's life and the
+   * site's own UI stayed broken until a reload. Capped for the same reason too.
+   */
+  const shielded = [];
+
+  function noteShielded(el) {
+    if (shielded.length >= STRIPPED_CAP) return false;
+    // Only the first shot per element is worth keeping. Recording every
+    // mousedown would restore the value this patch already wrote.
+    for (const entry of shielded) {
+      if (entry.el === el) return false;
+    }
+    shielded.push({
+      el,
+      value: el.style.getPropertyValue('pointer-events'),
+      priority: el.style.getPropertyPriority('pointer-events'),
+    });
+    return true;
+  }
+
+  function restoreShielded() {
+    while (shielded.length) {
+      const { el, value, priority } = shielded.pop();
+      try {
+        if (value) el.style.setProperty('pointer-events', value, priority);
+        else el.style.removeProperty('pointer-events');
+      } catch {
+        /* the element is gone, which is as restored as it needs to be */
+      }
+    }
+  }
+
   function restoreStripped() {
     // Runs after the undo stack has unwound, so setAttribute is the browser's
     // again and will not refuse these as hostile writes.
@@ -584,15 +621,25 @@
    * register the handler through the wrapping path, which keeps the page's
    * intent intact minus the cancelling.
    *
-   * The list of properties comes from the same vocabulary the wrapper uses.
-   * Keeping a second list by hand is what let this drift: it covered oncopy and
-   * oncontextmenu but never the keyboard group, so `document.onkeydown = ...`
-   * went on eating Ctrl+C on an always-unlocked site while the
-   * addEventListener spelling of the same block was handled. The pointer group
-   * stays out for the reason it stays out of HOSTILE_ATTRS: those handlers are
-   * load bearing on ordinary pages and only matter under aggressive mode.
+   * The list is the wrapper's own vocabulary, not a second one kept by hand.
+   * Every time this has been spelled out separately it has drifted: first it
+   * covered oncopy and oncontextmenu but never the keyboard group, so
+   * `document.onkeydown = ...` went on eating Ctrl+C on an always-unlocked site
+   * while the addEventListener spelling of the same block was handled. Then it
+   * covered the keyboard group but still not the pointer group, so
+   * `field.onpaste = () => false` survived the one mode that exists to unblock
+   * pasting, while `addEventListener('paste', ...)` and `onpaste="..."` were
+   * both already handled.
+   *
+   * Excluding the pointer group was justified by those handlers being load
+   * bearing on ordinary pages, and that argument does not survive contact with
+   * the code: whether a handler is neutered is decided at dispatch by
+   * typeIsHostile, which only says yes to this group under aggressive mode, and
+   * the wrapper puts `return false` back whenever it is not neutering. So
+   * wrapping an ordinary onmousedown changes nothing about it. That is exactly
+   * why WRAPPABLE itself has never excluded them.
    */
-  const HANDLER_EVENTS = SELECTION_EVENTS.concat(MENU_EVENTS, KEY_EVENTS);
+  const HANDLER_EVENTS = WRAPPABLE;
 
   function patchHandlerProps() {
     const protos = [Document.prototype, HTMLElement.prototype];
@@ -658,6 +705,16 @@
     if (!desc || !desc.configurable || !desc.set) return;
 
     const store = new WeakMap();
+    /**
+     * Every object that has been given a handler through this property.
+     *
+     * Weak, because this patch covers HTMLElement.prototype and a page that
+     * assigns `el.oncopy` in a list would otherwise be held alive by the fix.
+     * Capped for the same reason `stripped` is: past the cap the remaining
+     * targets keep their wrapper until the document goes away, which is a
+     * better failure than an unbounded list.
+     */
+    const targets = [];
     try {
       Object.defineProperty(proto, name, {
         configurable: true,
@@ -676,10 +733,41 @@
             const wrapped = wrapHandler(fn);
             store.set(this, { fn, wrapped });
             rawAdd.call(this, type, wrapped, false);
+            // Already tracked if it had one before, so this cannot grow on a
+            // page that reassigns the same handler property in a loop.
+            if (!previous && targets.length < STRIPPED_CAP) targets.push(new WeakRef(this));
           }
         },
       });
-      undo.push(() => Object.defineProperty(proto, name, desc));
+      undo.push(() => {
+        // The descriptor goes back first, so the assignment below lands in the
+        // browser's own handler slot rather than in this patch again.
+        Object.defineProperty(proto, name, desc);
+        // Handing the handler back is the whole job. The page assigned it to a
+        // property this patch was answering for, so the native slot was never
+        // filled: without this the wrapper stays registered on the target with
+        // nothing left to remove it, `document.oncopy` reads null so the page
+        // cannot clear its own handler, and a later re-install registers a
+        // second wrapper over the same function and fires it twice.
+        for (const ref of targets) {
+          const target = ref.deref();
+          if (!target) continue;
+          const entry = store.get(target);
+          if (!entry) continue;
+          store.delete(target);
+          try {
+            rawRemove.call(target, type, entry.wrapped, false);
+          } catch {
+            /* the target is gone; nothing left to unregister */
+          }
+          try {
+            target[name] = entry.fn;
+          } catch {
+            /* refuses the handler back; it is at least no longer wrapped */
+          }
+        }
+        targets.length = 0;
+      });
     } catch {
       /* frozen prototype; the capture net still covers this case */
     }
@@ -793,28 +881,55 @@
    * Blocking the write instead is deterministic: the page's observer fires,
    * calls setAttribute, and nothing happens.
    */
+  /** Whether this element must be refused this attribute name. */
+  function isHostileAttrWrite(el, name) {
+    if (!policy.enabled || typeof name !== 'string') return false;
+    if (attrList().indexOf(name.toLowerCase()) === -1) return false;
+    return !isEditor(el);
+  }
+
   function patchSetAttribute() {
-    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'setAttribute');
-    if (!desc || !desc.configurable || typeof desc.value !== 'function') return;
-    const original = desc.value;
+    /**
+     * setAttribute is the spelling a re-arming observer reaches for, and it is
+     * not the only one that lands a working inline handler. setAttributeNS with
+     * a null namespace and setAttributeNode both produce exactly the same
+     * `oncopy` content attribute, so guarding setAttribute alone moves the race
+     * one method along rather than ending it.
+     *
+     * A namespaced attribute is never an event handler content attribute, so
+     * those are left alone: refusing them would block ordinary SVG and XML
+     * markup for nothing.
+     */
+    const guards = [
+      { name: 'setAttribute', nameOf: (args) => args[0] },
+      // (namespace, qualifiedName, value)
+      { name: 'setAttributeNS', nameOf: (args) => (args[0] ? null : args[1]) },
+      { name: 'setAttributeNode', nameOf: (args) => attrName(args[0]) },
+      { name: 'setAttributeNodeNS', nameOf: (args) => attrName(args[0]) },
+    ];
 
-    Element.prototype.setAttribute = function (name, value) {
-      try {
-        if (
-          policy.enabled &&
-          typeof name === 'string' &&
-          attrList().indexOf(name.toLowerCase()) !== -1 &&
-          !isEditor(this)
-        ) {
-          return undefined;
+    for (const guard of guards) {
+      const desc = Object.getOwnPropertyDescriptor(Element.prototype, guard.name);
+      if (!desc || !desc.configurable || typeof desc.value !== 'function') continue;
+      const original = desc.value;
+      Element.prototype[guard.name] = function () {
+        try {
+          if (isHostileAttrWrite(this, guard.nameOf(arguments))) return undefined;
+        } catch {
+          /* fall through and behave normally */
         }
-      } catch {
-        /* fall through and behave normally */
-      }
-      return original.apply(this, arguments);
-    };
+        return original.apply(this, arguments);
+      };
+      undo.push(() => Object.defineProperty(Element.prototype, guard.name, desc));
+    }
+  }
 
-    undo.push(() => Object.defineProperty(Element.prototype, 'setAttribute', desc));
+  function attrName(node) {
+    try {
+      return node && !node.namespaceURI ? node.name : null;
+    } catch {
+      return null;
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -856,8 +971,25 @@
   /* DOM level work                                                    */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Inline handlers worth removing right now, under the switches as they stand.
+   *
+   * Which feature owns an attribute is the same question typeIsHostile already
+   * answers for the event of that name, and asking it twice is how the two
+   * disagreed: this returned the whole list whenever the extension was enabled
+   * at all, so a user who turned selection off still had `oncopy` and
+   * `onselectstart` torn out of every page, and a switch they had moved did
+   * nothing. The aggressive group stays gated on aggressive alone, because
+   * stripping onmousedown or onkeydown destroys a handler rather than merely
+   * declawing it, and that is only worth doing when explicitly asked for.
+   */
   function attrList() {
-    return policy.aggressive ? HOSTILE_ATTRS.concat(AGGRESSIVE_ATTRS) : HOSTILE_ATTRS;
+    const out = [];
+    for (const attr of HOSTILE_ATTRS) {
+      if (typeIsHostile(attr.slice(2))) out.push(attr);
+    }
+    if (policy.aggressive) out.push(...AGGRESSIVE_ATTRS);
+    return out;
   }
 
   function stripOne(el, attrs) {
@@ -885,6 +1017,10 @@
   function stripAttrs(root) {
     if (!policy.enabled || !root) return;
     const attrs = attrList();
+    // Every switch that owns an attribute is off, so there is nothing to strip.
+    // Worth returning early rather than falling through: an empty list builds an
+    // empty selector, and querySelectorAll('') throws.
+    if (!attrs.length) return;
     const selector = attrs.map((a) => `[${a}]`).join(',');
 
     // querySelectorAll never returns the node it was called on, and a node the
@@ -1122,12 +1258,17 @@
     const rect = el.getBoundingClientRect();
     const coverage = (rect.width * rect.height) / (innerWidth * innerHeight || 1);
     if (coverage < 0.5) return;
+    // Recorded before the write, so relocking can put the page's own value back.
+    noteShielded(el);
     el.style.setProperty('pointer-events', 'none', 'important');
   }
 
   function installShields() {
     rawAdd.call(window, 'mousedown', shieldHandler, true);
-    undo.push(() => rawRemove.call(window, 'mousedown', shieldHandler, true));
+    undo.push(() => {
+      rawRemove.call(window, 'mousedown', shieldHandler, true);
+      restoreShielded();
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -1171,11 +1312,19 @@
     installed = true;
 
     const start = () => {
+      // Relocking before the document element exists is rare and reachable: the
+      // shortcut works from the moment the tab starts loading. Without this the
+      // pending listener still fired, swept a page the user had just relocked,
+      // and started a MutationObserver that nothing was left to disconnect.
+      if (torn) return;
       sweep();
       startObserver();
     };
     if (document.documentElement) start();
-    else rawAdd.call(document, 'DOMContentLoaded', start, { once: true });
+    else {
+      rawAdd.call(document, 'DOMContentLoaded', start, { once: true });
+      undo.push(() => rawRemove.call(document, 'DOMContentLoaded', start, { once: true }));
+    }
   }
 
   function refresh() {

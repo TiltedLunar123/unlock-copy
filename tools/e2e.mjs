@@ -151,6 +151,21 @@ function deriveExtensionId(der) {
  * zipped and never released, and tools/build.mjs --check verifies the real
  * permission set on dist/chrome and dist/firefox.
  */
+/**
+ * Build, so that what gets loaded is what src currently says.
+ *
+ * This suite drives dist rather than src on purpose: the concatenated bundle is
+ * what a user actually runs. It was copying whatever dist happened to be holding
+ * though, so running `npm run e2e` straight after editing src tested the
+ * previous build and reported green on code that no longer existed. `npm run
+ * all` builds first, which is the only reason that never showed up.
+ */
+async function buildDist() {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  await promisify(execFile)(process.execPath, [path.join(ROOT, 'tools', 'build.mjs')]);
+}
+
 async function buildTestVariant() {
   const from = path.join(ROOT, 'dist', 'chrome');
   const to = path.join(ROOT, 'dist', 'e2e');
@@ -317,6 +332,241 @@ async function runPhase(cdp, page, phase, results) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Engine checks                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Assertions about the engine itself rather than about the clipboard.
+ *
+ * The three clipboard phases only ever ask "can the user copy this now", which
+ * is the right question for the blocking cases and cannot see anything about
+ * what happens when the engine is switched back off. Relocking is supposed to
+ * hand the page back exactly as it was found, and every one of the checks below
+ * covers something that used to survive a relock or never applied in the first
+ * place.
+ *
+ * Runs on its own fixture and its own tab, after the early phase has turned this
+ * origin into an always-unlock site, so the page arrives already patched at
+ * document_start. That ordering is load bearing rather than incidental: in late
+ * mode the capture net stops these events before any page listener runs, so a
+ * check that a page handler cannot cancel passes on a broken engine too. The
+ * paste check in particular is worthless in late mode. Anything that depends on
+ * a page listener actually running has to be asserted here, in early mode.
+ */
+async function engineChecks(cdp, sw, origin, results) {
+  const fixture = `${origin}/teardown.html`;
+  const record = (id, label, pass, detail) =>
+    results.push({ phase: 'engine', id, label, pass, detail: pass ? '' : detail });
+
+  const onTab = (body) =>
+    cdp.evaluate(
+      sw,
+      `(async () => {
+         const [tab] = await chrome.tabs.query({ url: ${JSON.stringify(fixture)} });
+         if (!tab) throw new Error('engine fixture tab not found');
+         ${body}
+       })()`
+    );
+
+  /**
+   * Through setFeature rather than straight into storage.
+   *
+   * setFeature is what the options page calls, and it broadcasts as well as
+   * writing. Writing storage directly leaves the isolated-world bridge holding
+   * the policy it fetched at document_start, and the bridge replays that cached
+   * copy every time an engine announces itself, so the next unlock came up on
+   * the old switches and the check below failed against correct code.
+   */
+  const setDefaults = async (patch) => {
+    for (const [feature, value] of Object.entries(patch)) {
+      // A global scope change never looks at the tab, so this runs before the
+      // fixture tab exists as happily as after it.
+      await cdp.evaluate(
+        sw,
+        `UC.background.setFeature(null, ${JSON.stringify(feature)}, ${JSON.stringify(
+          value
+        )}, 'global')`
+      );
+    }
+  };
+  const unlock = () => onTab('return UC.background.unlockOnce(tab);');
+  const lock = () => onTab('return UC.background.lock(tab);');
+
+  // Written before the page loads. The registered bridge reads the policy once,
+  // at document_start, so a switch flipped afterwards would not reach this load.
+  await setDefaults({
+    selection: true,
+    contextmenu: true,
+    keyboard: true,
+    cleanCopy: true,
+    aggressive: true,
+  });
+
+  const { targetId } = await cdp.send('Target.createTarget', { url: fixture });
+  const page = await cdp.attach(targetId);
+  await cdp.send('Page.enable', {}, page);
+  await cdp.send('Page.bringToFront', {}, page);
+  // The bridge fetches the policy over a message round trip after load, and the
+  // aggressive checks below are meaningless until that has landed.
+  await sleep(900);
+
+  try {
+    await runEngineChecks();
+  } finally {
+    await setDefaults({
+      selection: true,
+      contextmenu: true,
+      keyboard: true,
+      cleanCopy: true,
+      aggressive: false,
+    });
+    await cdp.send('Target.closeTarget', { targetId });
+  }
+
+  async function runEngineChecks() {
+  // Aggressive mode exists to unblock pasting. addEventListener('paste') and
+  // the onpaste content attribute were both covered; the property assignment,
+  // which is how a confirmation field usually spells it, was not. Asserted in
+  // early mode on purpose: in late mode the capture net stops the event before
+  // the field's own handler runs, so this passes without the property patch.
+  const paste = await cdp.evaluate(
+    page,
+    `(() => {
+       const field = document.getElementById('pastefield');
+       field.onpaste = () => false;
+       const event = new Event('paste', { cancelable: true, bubbles: true });
+       field.dispatchEvent(event);
+       return event.defaultPrevented;
+     })()`
+  );
+  record('PP', 'an onpaste property cannot cancel under aggressive', paste === false, 'the paste was cancelled');
+
+  // The shield writes an inline pointer-events onto the page's own overlay. The
+  // undo stack restores patches, not DOM edits it has no record of, so without
+  // a record the overlay stayed click-through for the rest of the document.
+  await cdp.send(
+    'Input.dispatchMouseEvent',
+    { type: 'mousePressed', x: 600, y: 450, button: 'left', buttons: 1, clickCount: 1 },
+    page
+  );
+  await cdp.send(
+    'Input.dispatchMouseEvent',
+    { type: 'mouseReleased', x: 600, y: 450, button: 'left', buttons: 0, clickCount: 1 },
+    page
+  );
+  await sleep(150);
+  const shielded = await cdp.evaluate(
+    page,
+    "document.getElementById('overlay').style.getPropertyValue('pointer-events')"
+  );
+  record('SH1', 'the shield actually fires on a full page overlay', shielded === 'none', `pointer-events is ${JSON.stringify(shielded)}; the restore check below proves nothing without this`);
+
+  // setAttribute is guarded, and it was the only spelling that was. The same
+  // inline handler arrives just as intact through the namespaced call and
+  // through an Attr node, so a page re-arming with either kept winning.
+  const ns = await cdp.evaluate(
+    page,
+    `(() => {
+       const el = document.getElementById('target');
+       el.removeAttribute('oncopy');
+       try { el.setAttributeNS(null, 'oncopy', 'return false'); } catch (e) { return 'threw: ' + e.message; }
+       return el.getAttribute('oncopy');
+     })()`
+  );
+  record('NS', 'setAttributeNS cannot re-arm a hostile handler', ns === null, `attribute is ${JSON.stringify(ns)}`);
+
+  const node = await cdp.evaluate(
+    page,
+    `(() => {
+       const el = document.getElementById('target');
+       el.removeAttribute('oncontextmenu');
+       try {
+         const attr = document.createAttribute('oncontextmenu');
+         attr.value = 'return false';
+         el.setAttributeNode(attr);
+       } catch (e) { return 'threw: ' + e.message; }
+       return el.getAttribute('oncontextmenu');
+     })()`
+  );
+  record('AN', 'setAttributeNode cannot re-arm a hostile handler', node === null, `attribute is ${JSON.stringify(node)}`);
+
+  // A switch that is off must not still be acting. Selection owns oncopy, so
+  // with selection on the write is refused and with it off the page keeps it.
+  const guardedOn = await cdp.evaluate(
+    page,
+    `(() => {
+       const el = document.getElementById('target');
+       el.removeAttribute('oncopy');
+       el.setAttribute('oncopy', 'return false');
+       return el.getAttribute('oncopy');
+     })()`
+  );
+  record('SW1', 'selection on refuses an oncopy write', guardedOn === null, `attribute is ${JSON.stringify(guardedOn)}`);
+
+  // The page assigns a handler through the property this patch answers for, and
+  // it has to get it back when the engine leaves. Without that the wrapper stays
+  // registered with nothing able to remove it, and the page's own `oncopy = null`
+  // silently fails.
+  await cdp.evaluate(
+    page,
+    `(() => {
+       window.__ucHits = 0;
+       document.oncopy = function () { window.__ucHits++; };
+     })()`
+  );
+  // One relock, then everything that has to survive it. Both of the checks
+  // below used to outlive disable(): the overlay kept the inline pointer-events
+  // the shield wrote, and the handler kept a wrapper the page had no way to
+  // reach, so `document.oncopy = null` silently did nothing.
+  await lock();
+  await sleep(250);
+
+  const restored = await cdp.evaluate(
+    page,
+    "document.getElementById('overlay').style.getPropertyValue('pointer-events')"
+  );
+  record('SH2', 'relocking gives the overlay its pointer-events back', restored === '', `pointer-events is still ${JSON.stringify(restored)}`);
+
+  const handback = await cdp.evaluate(
+    page,
+    `(() => {
+       const handedBack = typeof document.oncopy === 'function';
+       document.oncopy = null;
+       document.dispatchEvent(new Event('copy', { cancelable: true, bubbles: true }));
+       return { handedBack, hits: window.__ucHits };
+     })()`
+  );
+  record(
+    'HB',
+    'relocking hands an on* handler back to the page',
+    handback.handedBack === true && handback.hits === 0,
+    `handedBack=${handback.handedBack}, handler still fired ${handback.hits} time(s) after the page cleared it`
+  );
+
+  /* ---- a switch the user turned off has to stop acting ---- */
+  await setDefaults({ selection: false });
+  await unlock();
+  await sleep(300);
+  const guardedOff = await cdp.evaluate(
+    page,
+    `(() => {
+       const el = document.getElementById('target');
+       el.removeAttribute('oncopy');
+       el.setAttribute('oncopy', 'return false');
+       return el.getAttribute('oncopy');
+     })()`
+  );
+  record(
+    'SW2',
+    'selection off leaves an oncopy write alone',
+    guardedOff === 'return false',
+    `attribute is ${JSON.stringify(guardedOff)}, so a switch the user turned off is still acting`
+  );
+  await lock();
+  }
+}
+
+/* ------------------------------------------------------------------ */
 
 /**
  * Refuse to run when something is already serving devtools on our port.
@@ -328,11 +578,20 @@ async function runPhase(cdp, page, phase, results) {
  * than the twenty minutes of reading a result that describes another build.
  */
 async function assertPortFree() {
+  // Polled for a few seconds rather than sampled once. A browser from the run
+  // before can still be on its way out, and refusing to start because of that
+  // is a false alarm that costs exactly as much attention as the real thing.
+  // One genuinely left running is still there when this gives up.
+  const deadline = Date.now() + 8000;
   let existing;
-  try {
-    existing = await httpJson(PORT, '/json/version');
-  } catch {
-    return;
+  for (;;) {
+    try {
+      existing = await httpJson(PORT, '/json/version');
+    } catch {
+      return;
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(500);
   }
   throw new Error(
     `port ${PORT} is already serving devtools (${existing.Browser || 'unknown browser'}). ` +
@@ -343,6 +602,7 @@ async function assertPortFree() {
 
 async function main() {
   await assertPortFree();
+  await buildDist();
   const { dir, extensionId } = await buildTestVariant();
   const { server, port: filePort } = await serveDir(path.join(ROOT, 'test-pages'));
   const origin = `http://127.0.0.1:${filePort}`;
@@ -409,6 +669,23 @@ async function main() {
     await sleep(1200);
     await cdp.send('Page.bringToFront', {}, page);
     await runPhase(cdp, page, 'early', results);
+
+    /* ---- engine: teardown and switch behaviour, on its own tab ---- */
+    // After the early phase on purpose. That phase is what makes this origin an
+    // always-unlock site, and these checks need the engine to arrive at
+    // document_start: in late mode the capture net answers for the page's own
+    // listeners, so half of them would pass on a broken engine.
+    try {
+      await engineChecks(cdp, sw, origin, results);
+    } catch (err) {
+      results.push({
+        phase: 'engine',
+        id: '!',
+        label: 'engine checks',
+        pass: false,
+        detail: `harness error: ${err.message}`,
+      });
+    }
   } finally {
     server.close();
     await shutdown(session);
@@ -444,7 +721,7 @@ async function launchWithExtension(dir) {
 }
 
 function report(results) {
-  const phases = ['baseline', 'late', 'early'];
+  const phases = ['baseline', 'late', 'engine', 'early'];
   let failed = 0;
 
   for (const phase of phases) {
