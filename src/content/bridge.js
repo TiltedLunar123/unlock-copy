@@ -81,8 +81,15 @@
     });
 
   // Site-level changes made in the popup while the tab is open.
+  //
+  // Forwarded exactly as it arrived. The background strips `mode` from these on
+  // purpose, because only whoever injected a frame knows how that frame was
+  // reached, and stamping one back on here threw that away: a page relocked and
+  // then unlocked from the toolbar is running in late mode with the capture net,
+  // and telling it that it started early is the same wrong answer the
+  // withoutMode helper exists to prevent. The engine keeps its own.
   api.runtime.onMessage.addListener((message) => {
     if (!message || message.type !== 'unlock-copy/policy-changed') return;
-    send(Object.assign({ mode: 'early' }, message.policy || {}));
+    send(message.policy);
   });
 })();
