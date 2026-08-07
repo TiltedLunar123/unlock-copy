@@ -217,19 +217,44 @@ export async function launch({ port, headless = true, window = '1200,900' } = {}
 }
 
 export async function shutdown(session) {
+  // Ask the browser to close itself first.
+  //
+  // child.kill() only reaches the process node spawned, and on Windows that is
+  // a launcher which hands off and exits almost immediately. Killing it looked
+  // like it worked, waiting on it returned at once because it really had gone,
+  // and the actual browser carried on holding the debugging port. The next run
+  // then refused to start, blaming a browser the previous run believed it had
+  // shut down. Browser.close ends the right process.
+  try {
+    if (session?.cdp) await session.cdp.send('Browser.close');
+  } catch {
+    /* not connected, or it is already going */
+  }
   try {
     session?.child.kill();
   } catch {
     /* already exited */
   }
-  // Wait for it to actually be gone rather than guessing at a delay. The browser
-  // holds the debugging port until its process ends, and the flat 300ms this
-  // used to sleep was regularly short of that, so two runs back to back failed
-  // on "a previous run left its browser running" when nothing had been left
-  // behind at all.
-  await waitForExit(session?.child, 8000);
+  // Then wait for the port to go quiet, which is the question that matters.
+  // Whether the child has exited is a different one and answers yes too early.
+  // The flat 300ms this used to sleep was short of either.
+  if (session?.port) await waitForPortFree(session.port, 10000);
+  else await waitForExit(session?.child, 8000);
   if (session?.profile) {
     await fs.rm(session.profile, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function waitForPortFree(port, timeout) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    try {
+      await httpJson(port, '/json/version');
+    } catch {
+      return;
+    }
+    if (Date.now() >= deadline) return;
+    await sleep(250);
   }
 }
 
