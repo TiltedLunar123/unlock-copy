@@ -344,7 +344,16 @@
     } catch {
       return;
     }
-    const { defaults, sites } = await UC.settings.readAll();
+    // Degrading to the factory defaults is fine for a reader and destructive
+    // here. Everything defaults to on, so a store that blinked while the user
+    // flipped a switch would push "all features on" into every open tab, undoing
+    // every switch they had turned off and re-inserting the selection stylesheet
+    // on tabs they had just relocked. Nothing puts that back until each tab is
+    // reloaded. Saying nothing leaves every page on the policy it already has,
+    // which is the state the user last asked for.
+    const state = await UC.settings.readAll();
+    if (!state.ok) return;
+    const { defaults, sites } = state;
     const pushes = [];
     for (const target of tabs) {
       const info = UC.origins.classify(target.url, { fileAccess: fileAccess() });
