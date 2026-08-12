@@ -127,7 +127,7 @@ It runs three phases. The first one is the important one:
 
 The harness drives **Edge or Chromium, never branded Chrome**. Chrome ignores
 `--load-extension` and only logs a notice, so the suite would appear to run and prove
-nothing. Firefox is verified by hand; its MV3 build shares all the logic and differs only
+nothing. Firefox is checked by hand; its MV3 build shares all the logic and differs only
 in the manifest.
 
 ## Privacy
