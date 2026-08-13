@@ -5,6 +5,8 @@ them. Chrome and Firefox, Manifest V3.
 
 No account, no tracking, and no access to any site until you point it at one.
 
+<img src="docs/options.png" alt="The options page. Defaults for new sites lists four switches that are on by default, text selection and copy, right-click menu, keyboard shortcuts and clean copy, and one that is off, aggressive mode, described as fixing stubborn sites and breaking some ordinary ones. Below that an empty always-unlocked list, and a what-this-cannot-do section covering canvas text, CSS before and after content, cross-origin frames and the browser's PDF viewer." width="560">
+
 ## What it fixes
 
 Sites block copying in a surprising number of ways, and most extensions in this category
